@@ -12,7 +12,6 @@ import argparse
 import inspect
 import os
 import sys
-from abc import abstractproperty
 from copy import deepcopy
 from pathlib import Path
 from pkgutil import iter_modules
@@ -159,7 +158,8 @@ def get_param_classes(module) -> dict:
         f"{m[0]}: {m[1].param_cls.__name__}": m[1].param_cls
         for m in inspect.getmembers(module, inspect.isclass)
         if hasattr(m[1], "param_cls")
-        and not isinstance(m[1].param_cls, type(None) | abstractproperty)
+        and hasattr(m[1].param_cls, "__name__")
+        and m[1].param_cls is not None
     }
 
 
