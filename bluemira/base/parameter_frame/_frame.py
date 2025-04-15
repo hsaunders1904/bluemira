@@ -790,8 +790,10 @@ def make_parameter_frame(
     """
     from bluemira.base.reactor_config import ConfigParams  # noqa: PLC0415
 
-    if params is None:
-        raise ValueError("Cannot process parameters, 'param_cls' is None.")
+    if params is None or param_cls is None:
+        raise ValueError(
+            "Cannot process parameters, 'params' and/or 'param_cls' cannot be None."
+        )
     if isinstance(params, dict):
         return param_cls.from_dict(params, allow_unknown=allow_unknown)
     if isinstance(params, param_cls):

@@ -10,7 +10,7 @@ Interface for designer classes.
 from __future__ import annotations
 
 import abc
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from bluemira.base.parameter_frame import make_parameter_frame
 from bluemira.base.tools import _timing
@@ -19,7 +19,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from bluemira.base.builder import BuildConfig
-    from bluemira.base.parameter_frame.typed import ParameterFrameLike, ParameterFrameT
+    from bluemira.base.parameter_frame import ParameterFrame
+    from bluemira.base.parameter_frame.typed import ParameterFrameLike
 
 _DesignerReturnT = TypeVar("_DesignerReturnT")
 
@@ -101,15 +102,16 @@ class Designer(abc.ABC, Generic[_DesignerReturnT]):
         """
         raise NotImplementedError
 
-    @abc.abstractproperty
-    def param_cls(self) -> type[ParameterFrameT]:
+    @property
+    @abc.abstractmethod
+    def param_cls(self) -> type[ParameterFrame]:
         """The ParameterFrame class defining this designer's parameters."""
         ...
 
     @property
     def run_mode(self) -> str:
         """Get the run mode of this designer."""
-        return self.build_config.get(self.KEY_RUN_MODE, "run")
+        return str(self.build_config.get(self.KEY_RUN_MODE, "run"))
 
     def _get_run_func(self, mode: str) -> Callable:
         """Retrieve the function corresponding to the given run mode.
@@ -140,8 +142,8 @@ class Designer(abc.ABC, Generic[_DesignerReturnT]):
 def run_designer(
     designer_cls: type[Designer[_DesignerReturnT]],
     params: ParameterFrameLike,
-    build_config: dict,
-    **kwargs,
+    build_config: BuildConfig,
+    **kwargs: Any,
 ) -> _DesignerReturnT:
     """Make and run a designer, returning the result.
 
