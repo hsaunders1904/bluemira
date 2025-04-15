@@ -738,10 +738,10 @@ class EmptyFrame(ParameterFrame):
 
 def make_parameter_frame(
     params: ParameterFrameLike,
-    param_cls: type[ParameterFrameT] | None,
+    param_cls: type[ParameterFrame],
     *,
     allow_unknown: bool = False,
-) -> ParameterFrameT | None:
+) -> ParameterFrame:
     """
     Factory function to generate a `ParameterFrame` of a specific type.
 
@@ -769,10 +769,6 @@ def make_parameter_frame(
             * str:
                 The path to a JSON file, or, if the string starts with
                 '{', a JSON string.
-            * None:
-                For the case where no parameters are actually required.
-                This is intended for internal use, to aid in validation
-                of parameters in `Builder`\\s and `Designer`\\s.
 
     param_cls:
         The `ParameterFrame` class to create a new instance of.
@@ -794,10 +790,7 @@ def make_parameter_frame(
     """
     from bluemira.base.reactor_config import ConfigParams  # noqa: PLC0415
 
-    if param_cls is None:
-        if params is None:
-            # Case for where there are no parameters associated with the object
-            return params
+    if params is None:
         raise ValueError("Cannot process parameters, 'param_cls' is None.")
     if isinstance(params, dict):
         return param_cls.from_dict(params, allow_unknown=allow_unknown)

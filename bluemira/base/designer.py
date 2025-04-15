@@ -53,7 +53,11 @@ class Designer(abc.ABC, Generic[_DesignerReturnT]):
         *,
         verbose: bool = True,
     ):
-        self.params = make_parameter_frame(params, self.param_cls)
+        self.params = (
+            None
+            if self.param_cls is None
+            else make_parameter_frame(params, self.param_cls)
+        )
         self.build_config = build_config if build_config is not None else {}
         self._verbose = verbose
 

@@ -644,10 +644,10 @@ class TestParameterSetup:
     def test_params_None(self):
         with pytest.raises(ValueError):  # noqa: PT011
             make_parameter_frame(FRAME_DATA, None)
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError):  # noqa: PT011
             make_parameter_frame(None, BasicFrame)
-        params = make_parameter_frame(None, None)
-        assert params is None
+        with pytest.raises(ValueError):  # noqa: PT011
+            make_parameter_frame(None, None)
 
     @pytest.mark.parametrize(
         "frame",
