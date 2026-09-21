@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import dolfinx
+try:
+    import dolfinx
+except ImportError:
+    dolfinx = None
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import cm
