@@ -299,6 +299,23 @@ class GeometryParameterisation(abc.ABC, Generic[OptVariablesFrameT]):
         """
         ...
 
+    def discretise_coords(self, n_points: int = 100) -> Coordinates:
+        """
+        Return 2D/3D perimeter coordinates directly without CAD kernel invocation
+        when implemented by subclasses, falling back to CAD wire discretization.
+
+        Parameters
+        ----------
+        n_points:
+            Number of points to discretise the perimeter into.
+
+        Returns
+        -------
+        Coordinates:
+            Discretised coordinates of the perimeter.
+        """
+        return self.create_shape().discretise(n_points, byedges=False)
+
     def to_json(self, file: str):
         """
         Write the json representation of the GeometryParameterisation to a file.
@@ -730,6 +747,37 @@ class PrincetonD(GeometryParameterisation[PrincetonDOptVariables]):
         # 3586
         straight_segment = wire_closure(outer_arc, label="straight_segment")
         return BluemiraWire([outer_arc, straight_segment], label=label)
+
+    def discretise_coords(self, n_points: int = 100) -> Coordinates:
+        """
+        Return 2D coordinates of the Princeton D directly in NumPy,
+        bypassing OpenCASCADE B-spline interpolation and wire construction.
+
+        Parameters
+        ----------
+        n_points:
+            Number of points to discretise the perimeter into.
+
+        Returns
+        -------
+        Coordinates:
+            Discretised coordinates of the perimeter.
+        """
+        x1 = self.variables.x1.value
+        x2 = self.variables.x2.value
+        dz = self.variables.dz.value
+
+        n_straight = max(3, int(n_points * 0.2))
+        n_arc = max(4, n_points - n_straight + 1)
+        x_arc, z_arc = _princeton_d(x1, x2, dz, n_arc)
+        z_straight = np.linspace(z_arc[-1], z_arc[0], n_straight + 1)
+        x_straight = np.full_like(z_straight, x1)
+
+        x_all = np.concatenate([x_arc, x_straight[1:-1]])
+        z_all = np.concatenate([z_arc, z_straight[1:-1]])
+        y_all = np.zeros(len(x_all))
+
+        return Coordinates({"x": x_all, "y": y_all, "z": z_all})
 
     def f_ineq_constraint(self) -> npt.NDArray[np.float64]:
         """

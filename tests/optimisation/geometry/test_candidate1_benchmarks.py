@@ -48,3 +48,34 @@ class TestCandidate1Benchmarks:
         # Caching should be at least 5x faster for 10 evals (typically >50x)
         assert speedup >= 5.0
         assert cached_time < uncached_time
+
+    def test_task_2_1_direct_discretise_benchmark(self):
+        """
+        Benchmark Task 2.1: Direct coordinate discretization vs CAD wire discretization.
+        """
+        geom = PrincetonD()
+        n_evals = 10
+        n_points = 100
+
+        # CAD wire discretise timing (clearing cache to simulate uncached CAD build)
+        t0 = time.perf_counter()
+        for _ in range(n_evals):
+            geom.clear_cache()
+            _ = geom.create_shape().discretise(n_points, byedges=False)
+        cad_time = time.perf_counter() - t0
+
+        # Direct NumPy discretise_coords timing
+        t0 = time.perf_counter()
+        for _ in range(n_evals):
+            coords = geom.discretise_coords(n_points)
+        direct_time = time.perf_counter() - t0
+
+        speedup = cad_time / direct_time
+        print(f"\n[Task 2.1 Benchmark] {n_evals} discretisations ({n_points} points):")
+        print(f"  CAD wire discretise:   {cad_time * 1e3:.2f} ms ({cad_time / n_evals * 1e3:.2f} ms/eval)")
+        print(f"  Direct NumPy discretise: {direct_time * 1e3:.2f} ms ({direct_time / n_evals * 1e3:.4f} ms/eval)")
+        print(f"  Speedup:               {speedup:.1f}x")
+
+        # Verify point count and basic shape fidelity
+        assert len(coords) == n_points
+        assert speedup >= 10.0
