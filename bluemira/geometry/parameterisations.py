@@ -16,7 +16,7 @@ import json
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TextIO, TypeVar
 
@@ -87,9 +87,31 @@ class GeometryParameterisation(abc.ABC, Generic[OptVariablesFrameT]):
     variables with initial values, and override the create_shape method.
     """
 
-    __slots__ = ("_variables", "name")
+    __slots__ = ("_cached_shape", "_variables", "name")
 
     optvar_cls: type[OptVariablesFrameT] | None = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "create_shape" in cls.__dict__:
+            orig_create_shape = cls.__dict__["create_shape"]
+            if not getattr(orig_create_shape, "__isabstractmethod__", False):
+
+                @wraps(orig_create_shape)
+                def memoized_create_shape(self, *args, **kwargs):
+                    cache_key = self._make_shape_cache_key(args, kwargs)
+                    if (
+                        cache_key is not None
+                        and self._cached_shape is not None
+                        and self._cached_shape[0] == cache_key
+                    ):
+                        return self._cached_shape[1]
+                    shape = orig_create_shape(self, *args, **kwargs)
+                    if cache_key is not None:
+                        self._cached_shape = (cache_key, shape)
+                    return shape
+
+                setattr(cls, "create_shape", memoized_create_shape)
 
     def __init__(self, variables: OptVariablesFrameT | VarDictT | None = None, **kwargs):  # noqa: ARG002
         """
@@ -106,6 +128,7 @@ class GeometryParameterisation(abc.ABC, Generic[OptVariablesFrameT]):
             If the subclass does not define a valid ``optvar_cls``.
         """
         self.name = self.__class__.__name__
+        self._cached_shape: tuple[tuple, BluemiraWire] | None = None
         if self.optvar_cls is None:
             raise TypeError(
                 "The type of optimisation variables for the parameterisation"
@@ -123,6 +146,20 @@ class GeometryParameterisation(abc.ABC, Generic[OptVariablesFrameT]):
             )
             variables = self.optvar_cls()
         self._variables = variables
+
+    def _make_shape_cache_key(self, args: tuple, kwargs: dict) -> tuple | None:
+        try:
+            val_tuple = tuple(float(v) for v in self.variables.values)
+            kw_items = tuple(sorted(kwargs.items()))
+            return (val_tuple, args, kw_items)
+        except (TypeError, ValueError):
+            return None
+
+    def clear_cache(self):
+        """
+        Clear cached shape and other memoized geometry states.
+        """
+        self._cached_shape = None
 
     @property
     def n_ineq_constraints(self) -> int:
@@ -2593,6 +2630,9 @@ class PictureFrame(
         result = cls.__new__(cls)
         memo[id(self)] = result
         for k in (*self.__slots__, *super().__slots__):
+            if k == "_cached_shape":
+                result._cached_shape = None
+                continue
             with suppress(AttributeError):
                 v = getattr(self, k)
                 setattr(
