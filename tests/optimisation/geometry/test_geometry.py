@@ -8,7 +8,11 @@ from unittest import mock
 import numpy as np
 import pytest
 
-from bluemira.geometry.optimisation import optimise_geometry
+from bluemira.geometry.optimisation import (
+    make_minimum_distance_constraint,
+    optimise_geometry,
+    wire_length_objective,
+)
 from bluemira.geometry.optimisation._optimise import KeepOutZone
 from bluemira.geometry.parameterisations import (
     GeometryParameterisation,
@@ -270,3 +274,41 @@ class TestGeometry:
         )
 
         assert square_constraint(result.geom)[0] == pytest.approx(0, abs=1e-8)
+
+    def test_minimum_distance_constraint_in_optimise_geometry(self):
+        """Test optimise_geometry with make_minimum_distance_constraint and wire_length_objective."""
+        geom = PrincetonD()
+        obstacle = make_circle(radius=2.0, center=(10.0, 0, 0), axis=(0, 1, 0))
+        min_dist = 1.5
+
+        dist_constraint = make_minimum_distance_constraint(
+            obstacle, min_dist, tol=1e-5, name="clearance"
+        )
+        result = optimise_geometry(
+            geom,
+            f_objective=wire_length_objective,
+            ineq_constraints=[dist_constraint],
+            opt_conditions={"max_eval": 100, "ftol_rel": 1e-5},
+        )
+        final_dist = dist_constraint["f_constraint"](result.geom)[0]
+        assert final_dist <= 1e-4
+
+    def test_optimisation_context_caching_consistency(self):
+        """Test that GeomOptimisationContext caching produces identical results to uncached evaluations."""
+        from bluemira.geometry.optimisation import GeomOptimisationContext
+
+        geom = PrincetonD()
+        ctx = GeomOptimisationContext(geom)
+        x = geom.variables.get_normalised_values()
+
+        ctx.update_x(x)
+        coords1 = ctx.get_coords(50)
+        coords2 = ctx.get_coords(50)
+        assert coords1 is coords2
+        assert np.allclose(coords1.xz, geom.discretise_coords(50).xz)
+
+        x_new = x * 0.9
+        ctx.update_x(x_new)
+        coords3 = ctx.get_coords(50)
+        assert coords3 is not coords1
+        assert np.allclose(coords3.xz, geom.discretise_coords(50).xz)
