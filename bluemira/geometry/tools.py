@@ -25,6 +25,7 @@ import numba as nb
 import numpy as np
 from numpy import typing as npt
 from scipy.spatial import ConvexHull
+from scipy.spatial.distance import cdist
 
 from bluemira.base.constants import EPS
 from bluemira.base.file import force_file_extension, try_get_bluemira_path
@@ -1392,6 +1393,59 @@ def distance_to(
     shape1 = _make_vertex(geo1) if isinstance(geo1, Iterable) else geo1.shape
     shape2 = _make_vertex(geo2) if isinstance(geo2, Iterable) else geo2.shape
     return cadapi.dist_to_shape(shape1, shape2)
+
+
+def _extract_2d_points(geo: Any, n_points: int = 100) -> np.ndarray:
+    """Helper to extract (N, 2) x-z coordinates from diverse geometry types."""
+    if isinstance(geo, np.ndarray):
+        if geo.ndim == 2:
+            return geo if geo.shape[1] == 2 else geo.T
+        if geo.ndim == 1 and len(geo) == 2:
+            return geo.reshape(1, 2)
+        if geo.ndim == 1 and len(geo) == 3:
+            return np.array([[geo[0], geo[2]]])
+    if hasattr(geo, "discretise_coords"):
+        coords = geo.discretise_coords(n_points)
+        return coords.xz.T
+    if hasattr(geo, "discretise"):
+        coords = geo.discretise(n_points, byedges=False)
+        return coords.xz.T
+    if hasattr(geo, "xz"):
+        xz = geo.xz
+        return xz.T if xz.shape[0] == 2 else xz
+    raise TypeError(
+        f"Unsupported geometry type for 2D distance calculation: {type(geo)}"
+    )
+
+
+def fast_2d_distance(
+    geo1: Any,
+    geo2: Any,
+    n_points: int = 100,
+) -> float:
+    """
+    Fast 2D minimum distance between two geometry objects in the x-z plane.
+
+    Computes the minimum Euclidean distance between discretized perimeter points
+    using vectorized spatial distances, bypassing CAD kernel BRepExtrema queries.
+
+    Parameters
+    ----------
+    geo1:
+        First geometry object, parameterisation, coordinates, or point array.
+    geo2:
+        Second geometry object, parameterisation, coordinates, or point array.
+    n_points:
+        Discretization resolution used when converting geometry shapes.
+
+    Returns
+    -------
+    float:
+        Minimum 2D distance in the x-z plane.
+    """
+    p1 = _extract_2d_points(geo1, n_points)
+    p2 = _extract_2d_points(geo2, n_points)
+    return float(cdist(p1, p2).min())
 
 
 def split_wire(

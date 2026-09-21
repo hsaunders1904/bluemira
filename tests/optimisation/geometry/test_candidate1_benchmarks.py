@@ -188,3 +188,39 @@ class TestCandidate1Benchmarks:
         assert abs(opt_len - cad_len) / cad_len < 1e-4
         assert abs(builder_len - cad_len) / cad_len < 1e-4
         assert speedup >= 10.0
+
+    def test_task_4_1_fast_2d_distance_benchmark(self):
+        """
+        Benchmark Task 4.1: Fast 2D vectorized distance vs CAD distance_to.
+        """
+        from bluemira.geometry.tools import distance_to, fast_2d_distance, make_circle
+
+        geom = PrincetonD()
+        obstacle = make_circle(radius=3.0, center=(9.0, 0, 0), axis=(0, 1, 0))
+        target_pts = obstacle.discretise(100, byedges=False).xz.T
+        n_evals = 20
+
+        # CAD distance_to timing (clearing cache to simulate uncached CAD rebuild)
+        t0 = time.perf_counter()
+        cad_dist = 0.0
+        for _ in range(n_evals):
+            geom.clear_cache()
+            cad_dist = distance_to(geom.create_shape(), obstacle)[0]
+        cad_time = time.perf_counter() - t0
+
+        # Fast 2D distance timing
+        t0 = time.perf_counter()
+        fast_dist = 0.0
+        for _ in range(n_evals):
+            fast_dist = fast_2d_distance(geom, target_pts, n_points=100)
+        fast_time = time.perf_counter() - t0
+
+        speedup = cad_time / fast_time
+        print(f"\n[Task 4.1 Benchmark] {n_evals} distance calculations:")
+        print(f"  CAD distance_to:        {cad_time * 1e3:.2f} ms ({cad_time / n_evals * 1e3:.2f} ms/eval)")
+        print(f"  fast_2d_distance:       {fast_time * 1e3:.2f} ms ({fast_time / n_evals * 1e3:.4f} ms/eval)")
+        print(f"  CAD dist:               {cad_dist:.4f} m, Fast dist: {fast_dist:.4f} m")
+        print(f"  Speedup:                {speedup:.1f}x")
+
+        assert abs(fast_dist - cad_dist) < 0.05
+        assert speedup >= 10.0
