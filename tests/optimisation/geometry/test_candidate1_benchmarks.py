@@ -416,3 +416,75 @@ class TestCandidate1Benchmarks:
 
         assert speedup_pf >= 2.5
         assert speedup_pd >= 1.05
+
+    def test_task_6_2_end_to_end_reactor_build_benchmark(self):
+        """
+        Benchmark Task 6.2: End-to-end reactor coil geometry optimization workflow.
+
+        Compares the baseline CAD-coupled workflow (CAD wire length objective +
+        CAD distance_to obstacle constraints with shape re-generation)
+        against the decoupled & cached Candidate 1 architecture (wire_length_objective +
+        make_minimum_distance_constraint + GeomOptimisationContext).
+        """
+        from bluemira.geometry.optimisation import (
+            make_minimum_distance_constraint,
+            optimise_geometry,
+            wire_length_objective,
+        )
+        from bluemira.geometry.tools import distance_to, make_circle
+
+        obstacle1 = make_circle(radius=2.0, center=(9.0, 0, 0), axis=(0, 1, 0))
+        obstacle2 = make_circle(radius=1.5, center=(13.0, 3, 0), axis=(0, 1, 0))
+        min_dist = 1.0
+        max_eval = 25
+
+        # 1. Baseline CAD-coupled workflow
+        p_base = PrincetonD()
+
+        def cad_obj(g):
+            g.clear_cache()
+            return g.create_shape().length
+
+        def cad_c1(g):
+            g.clear_cache()
+            return np.array([min_dist - distance_to(g.create_shape(), obstacle1)[0]])
+
+        def cad_c2(g):
+            g.clear_cache()
+            return np.array([min_dist - distance_to(g.create_shape(), obstacle2)[0]])
+
+        t0 = time.perf_counter()
+        _ = optimise_geometry(
+            geom=p_base,
+            f_objective=cad_obj,
+            ineq_constraints=[
+                {"name": "c1", "f_constraint": cad_c1, "tolerance": np.array([1e-6])},
+                {"name": "c2", "f_constraint": cad_c2, "tolerance": np.array([1e-6])},
+            ],
+            opt_conditions={"max_eval": max_eval, "ftol_rel": 1e-4},
+        )
+        t_base = time.perf_counter() - t0
+
+        # 2. Optimized Candidate 1 decoupled workflow
+        p_opt = PrincetonD()
+        c1_fast = make_minimum_distance_constraint(obstacle1, min_dist, tol=1e-6, name="c1")
+        c2_fast = make_minimum_distance_constraint(obstacle2, min_dist, tol=1e-6, name="c2")
+
+        t0 = time.perf_counter()
+        res_opt = optimise_geometry(
+            geom=p_opt,
+            f_objective=wire_length_objective,
+            ineq_constraints=[c1_fast, c2_fast],
+            opt_conditions={"max_eval": max_eval, "ftol_rel": 1e-4},
+        )
+        t_opt = time.perf_counter() - t0
+
+        speedup = t_base / t_opt
+        print(f"\n[Task 6.2 Benchmark] End-to-end reactor coil GOP solve ({max_eval} evals, 2 obstacles):")
+        print(f"  Baseline CAD Workflow:       {t_base * 1e3:.2f} ms")
+        print(f"  Decoupled & Cached Workflow: {t_opt * 1e3:.2f} ms")
+        print(f"  Overall Speedup:             {speedup:.1f}x")
+        print(f"  Constraints satisfied:       {res_opt.constraints_satisfied}")
+
+        assert speedup >= 10.0
+        assert res_opt.constraints_satisfied
