@@ -316,6 +316,22 @@ class GeometryParameterisation(abc.ABC, Generic[OptVariablesFrameT]):
         """
         return self.create_shape().discretise(n_points, byedges=False)
 
+    def calculate_length(self, n_points: int = 200) -> float:
+        """
+        Calculate the perimeter length of the geometry parameterisation.
+
+        Parameters
+        ----------
+        n_points:
+            Number of points used for numerical approximation (if needed).
+
+        Returns
+        -------
+        float:
+            Perimeter length [m].
+        """
+        return float(self.create_shape().length)
+
     def to_json(self, file: str):
         """
         Write the json representation of the GeometryParameterisation to a file.
@@ -778,6 +794,30 @@ class PrincetonD(GeometryParameterisation[PrincetonDOptVariables]):
         y_all = np.zeros(len(x_all))
 
         return Coordinates({"x": x_all, "y": y_all, "z": z_all})
+
+    def calculate_length(self, n_points: int = 500) -> float:
+        """
+        Calculate the perimeter length of the Princeton D directly in NumPy,
+        bypassing OpenCASCADE wire construction and CAD curve integration.
+
+        Parameters
+        ----------
+        n_points:
+            Number of points along the outer arc for numerical integration.
+
+        Returns
+        -------
+        float:
+            Perimeter length [m].
+        """
+        x1 = self.variables.x1.value
+        x2 = self.variables.x2.value
+        dz = self.variables.dz.value
+
+        x_arc, z_arc = _princeton_d(x1, x2, dz, n_points)
+        arc_length = np.sum(np.hypot(np.diff(x_arc), np.diff(z_arc)))
+        straight_segment = abs(z_arc[-1] - z_arc[0])
+        return float(arc_length + straight_segment)
 
     def f_ineq_constraint(self) -> npt.NDArray[np.float64]:
         """

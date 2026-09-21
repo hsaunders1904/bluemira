@@ -116,3 +116,36 @@ class TestCandidate1Benchmarks:
 
         assert len(dist) == n_points
         assert speedup >= 10.0
+
+    def test_task_3_1_calculate_length_benchmark(self):
+        """
+        Benchmark Task 3.1: Direct calculate_length vs CAD wire .length.
+        """
+        geom = PrincetonD()
+        n_evals = 20
+
+        # CAD wire length timing (clearing cache to simulate uncached CAD wire rebuild)
+        t0 = time.perf_counter()
+        cad_len = 0.0
+        for _ in range(n_evals):
+            geom.clear_cache()
+            cad_len = geom.create_shape().length
+        cad_time = time.perf_counter() - t0
+
+        # Direct NumPy calculate_length timing
+        t0 = time.perf_counter()
+        direct_len = 0.0
+        for _ in range(n_evals):
+            direct_len = geom.calculate_length()
+        direct_time = time.perf_counter() - t0
+
+        speedup = cad_time / direct_time
+        rel_error = abs(direct_len - cad_len) / cad_len
+        print(f"\n[Task 3.1 Benchmark] {n_evals} length calculations:")
+        print(f"  CAD wire length:        {cad_time * 1e3:.2f} ms ({cad_time / n_evals * 1e3:.2f} ms/eval)")
+        print(f"  Direct calculate_length: {direct_time * 1e3:.2f} ms ({direct_time / n_evals * 1e3:.4f} ms/eval)")
+        print(f"  Speedup:                {speedup:.1f}x")
+        print(f"  Relative error:         {rel_error:.2e}")
+
+        assert rel_error < 1e-4
+        assert speedup >= 10.0
