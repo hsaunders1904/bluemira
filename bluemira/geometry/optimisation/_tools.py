@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -14,7 +15,11 @@ from bluemira.geometry.optimisation.typed import (
     GeomOptimiserObjective,
 )
 from bluemira.geometry.parameterisations import GeometryParameterisation
-from bluemira.geometry.tools import signed_distance_2D_polygon
+from bluemira.geometry.tools import (
+    _extract_2d_points,
+    fast_2d_distance,
+    signed_distance_2D_polygon,
+)
 from bluemira.geometry.wire import BluemiraWire
 from bluemira.optimisation import ConstraintT, ObjectiveCallable, OptimiserCallable
 from bluemira.optimisation.error import GeometryOptimisationError
@@ -206,6 +211,52 @@ def make_keep_out_zone_constraint(koz: KeepOutZone) -> GeomConstraintT:
         "name": "KOZ",
         "f_constraint": _f_constraint,
         "tolerance": np.full(shape_n_discr, koz.tol),
+    }
+
+
+def make_minimum_distance_constraint(
+    target: Any,
+    min_distance: float,
+    *,
+    n_points: int = 100,
+    tol: float = 1e-8,
+    name: str = "minimum_distance",
+) -> GeomConstraintT:
+    """
+    Make an inequality constraint enforcing a minimum clearance distance:
+        c(x) = min_distance - distance(geom, target) <= 0
+
+    Pre-discretizes the fixed target geometry once and uses fast 2D distance
+    in inner optimization loops without invoking the CAD kernel.
+
+    Parameters
+    ----------
+    target:
+        The target wire, boundary, coordinates, or point array to maintain clearance from.
+    min_distance:
+        Minimum clearance distance [m].
+    n_points:
+        Discretization resolution for the geometry parameterisation.
+    tol:
+        Constraint tolerance for the optimizer.
+    name:
+        Name for the constraint.
+
+    Returns
+    -------
+    GeomConstraintT:
+        Geometry constraint dictionary for use with optimise_geometry.
+    """
+    target_pts = _extract_2d_points(target, n_points)
+
+    def _f_constraint(geom: GeometryParameterisation) -> np.ndarray:
+        dist = fast_2d_distance(geom, target_pts, n_points=n_points)
+        return np.array([min_distance - dist])
+
+    return {
+        "name": name,
+        "f_constraint": _f_constraint,
+        "tolerance": np.array([tol]),
     }
 
 

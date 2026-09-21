@@ -9,6 +9,7 @@ Geometry Optimisation Caching and CAD Decoupling
 """
 
 import time
+import numpy as np
 import pytest
 from bluemira.geometry.parameterisations import PictureFrame, PrincetonD
 
@@ -223,4 +224,44 @@ class TestCandidate1Benchmarks:
         print(f"  Speedup:                {speedup:.1f}x")
 
         assert abs(fast_dist - cad_dist) < 0.05
+        assert speedup >= 10.0
+
+    def test_task_4_2_make_minimum_distance_constraint_benchmark(self):
+        """
+        Benchmark Task 4.2: Standard make_minimum_distance_constraint vs CAD distance_to constraint.
+        """
+        from bluemira.geometry.optimisation import make_minimum_distance_constraint
+        from bluemira.geometry.tools import distance_to, make_circle
+
+        geom = PrincetonD()
+        obstacle = make_circle(radius=3.0, center=(9.0, 0, 0), axis=(0, 1, 0))
+        min_dist = 2.5
+        n_evals = 20
+
+        # Ad-hoc CAD constraint lambda (clearing cache to simulate uncached CAD rebuild)
+        t0 = time.perf_counter()
+        cad_res = np.zeros(1)
+        for _ in range(n_evals):
+            geom.clear_cache()
+            cad_res = np.array([min_dist - distance_to(geom.create_shape(), obstacle)[0]])
+        cad_time = time.perf_counter() - t0
+
+        # Fast minimum distance constraint
+        constr = make_minimum_distance_constraint(obstacle, min_dist, n_points=100)
+        f_constr = constr["f_constraint"]
+
+        t0 = time.perf_counter()
+        fast_res = np.zeros(1)
+        for _ in range(n_evals):
+            fast_res = f_constr(geom)
+        fast_time = time.perf_counter() - t0
+
+        speedup = cad_time / fast_time
+        print(f"\n[Task 4.2 Benchmark] {n_evals} minimum distance constraint evaluations:")
+        print(f"  CAD constraint:            {cad_time * 1e3:.2f} ms ({cad_time / n_evals * 1e3:.2f} ms/eval)")
+        print(f"  make_minimum_distance_constraint: {fast_time * 1e3:.2f} ms ({fast_time / n_evals * 1e3:.4f} ms/eval)")
+        print(f"  CAD val:                   {cad_res[0]:.4f}, Fast val: {fast_res[0]:.4f}")
+        print(f"  Speedup:                   {speedup:.1f}x")
+
+        assert abs(fast_res[0] - cad_res[0]) < 0.05
         assert speedup >= 10.0
