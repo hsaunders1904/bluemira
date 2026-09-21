@@ -39,7 +39,11 @@ from bluemira.base.reactor_config import ReactorConfig
 from bluemira.display.palettes import BLUE_PALETTE
 from bluemira.equilibria.shapes import JohnerLCFS
 from bluemira.geometry.face import BluemiraFace
-from bluemira.geometry.optimisation import optimise_geometry
+from bluemira.geometry.optimisation import (
+    make_minimum_distance_constraint,
+    optimise_geometry,
+    wire_length_objective,
+)
 from bluemira.geometry.parameterisations import GeometryParameterisation
 from bluemira.geometry.tools import (
     distance_to,
@@ -281,21 +285,21 @@ class TFCoilDesigner(Designer[GeometryParameterisation]):
         We're minimising the size of the coil whilst always keeping a
         minimum distance to the plasma.
         """
-        distance_constraint = {
-            "name": "distance",
-            "f_constraint": lambda g: self._constrain_distance(g, min_dist_to_plasma),
-            "tolerance": np.array([1e-6]),
-        }
+        distance_constraint = make_minimum_distance_constraint(
+            self.lcfs, min_dist_to_plasma, tol=1e-6, name="distance"
+        )
         optimisation_result = optimise_geometry(
             geom=geom,
-            f_objective=lambda g: g.create_shape().length,
+            f_objective=wire_length_objective,
             opt_conditions={"max_eval": 500, "ftol_rel": 1e-6},
             ineq_constraints=[distance_constraint],
         )
         return optimisation_result.geom
 
-    def _constrain_distance(self, geom: BluemiraWire, min_distance: float) -> np.ndarray:
-        return np.array(min_distance - distance_to(geom.create_shape(), self.lcfs)[0])
+    def _constrain_distance(self, geom: GeometryParameterisation, min_distance: float) -> np.ndarray:
+        from bluemira.geometry.tools import fast_2d_distance
+
+        return np.array([min_distance - fast_2d_distance(geom, self.lcfs)])
 
 
 class TFCoilBuilder(Builder):

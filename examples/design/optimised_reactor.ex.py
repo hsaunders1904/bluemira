@@ -62,10 +62,11 @@ from bluemira.equilibria.profiles import CustomProfile
 from bluemira.equilibria.shapes import JohnerLCFS
 from bluemira.equilibria.solve import PicardIterator
 from bluemira.geometry.face import BluemiraFace
-from bluemira.geometry.optimisation import optimise_geometry
+from bluemira.geometry.optimisation import optimise_geometry, wire_length_objective
 from bluemira.geometry.parameterisations import PrincetonD
 from bluemira.geometry.tools import (
     distance_to,
+    fast_2d_distance,
     interpolate_bspline,
     make_polygon,
     offset_wire,
@@ -304,7 +305,7 @@ class TFDesigner(Designer[OptimisedReactorParams]):
             keep_history=True,
             opt_conditions={"max_eval": 500, "ftol_rel": 1e-6},
             geom=p,
-            f_objective=lambda g: g.create_shape().length,
+            f_objective=wire_length_objective,
             ineq_constraints=[distance_constraint],
         )
 
@@ -335,7 +336,7 @@ class TFDesigner(Designer[OptimisedReactorParams]):
     def _constrain_distance(self, geom: PrincetonD) -> float:
         bb_ob_wire = self.bb_xz_face.boundary[0]
         min_dist = self.params.g_bb_tf_min.value + self.params.tk_tf.value
-        r = min_dist - distance_to(geom.create_shape(), bb_ob_wire)[0]
+        r = min_dist - fast_2d_distance(geom, bb_ob_wire)
         g = r
         if r > 0:
             g = math.exp(10 * r) - 1

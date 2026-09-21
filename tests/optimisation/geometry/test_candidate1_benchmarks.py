@@ -265,3 +265,55 @@ class TestCandidate1Benchmarks:
 
         assert abs(fast_res[0] - cad_res[0]) < 0.05
         assert speedup >= 10.0
+
+    def test_task_4_3_reactor_designer_gop_benchmark(self):
+        """
+        Benchmark Task 4.3: Full reactor designer TF coil GOP solve comparing
+        baseline CAD-heavy callbacks against decoupled fast objectives & constraints.
+        """
+        from bluemira.geometry.optimisation import (
+            make_minimum_distance_constraint,
+            optimise_geometry,
+            wire_length_objective,
+        )
+        from bluemira.geometry.tools import distance_to, make_circle
+
+        obstacle = make_circle(radius=3.0, center=(9.0, 0, 0), axis=(0, 1, 0))
+        min_dist = 2.5
+        max_eval = 25
+
+        # Baseline GOP run (CAD wire length lambda + CAD distance_to constraint)
+        p1 = PrincetonD()
+        t0 = time.perf_counter()
+        _ = optimise_geometry(
+            geom=p1,
+            f_objective=lambda g: g.create_shape().length,
+            ineq_constraints=[{
+                "name": "distance",
+                "f_constraint": lambda g: np.array([min_dist - distance_to(g.create_shape(), obstacle)[0]]),
+                "tolerance": np.array([1e-6]),
+            }],
+            opt_conditions={"max_eval": max_eval, "ftol_rel": 1e-4},
+        )
+        t_base = time.perf_counter() - t0
+
+        # Fast decoupled GOP run (wire_length_objective + make_minimum_distance_constraint)
+        p2 = PrincetonD()
+        t0 = time.perf_counter()
+        _ = optimise_geometry(
+            geom=p2,
+            f_objective=wire_length_objective,
+            ineq_constraints=[
+                make_minimum_distance_constraint(obstacle, min_dist, tol=1e-6, name="distance")
+            ],
+            opt_conditions={"max_eval": max_eval, "ftol_rel": 1e-4},
+        )
+        t_opt = time.perf_counter() - t0
+
+        speedup = t_base / t_opt
+        print(f"\n[Task 4.3 Benchmark] Reactor TF Coil GOP Solve ({max_eval} max evals):")
+        print(f"  Baseline CAD GOP:    {t_base * 1e3:.2f} ms")
+        print(f"  Fast Decoupled GOP:  {t_opt * 1e3:.2f} ms")
+        print(f"  Speedup:             {speedup:.1f}x")
+
+        assert speedup >= 5.0
