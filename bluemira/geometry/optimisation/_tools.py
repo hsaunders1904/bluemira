@@ -138,11 +138,16 @@ def calculate_signed_distance(
     :
         Signed distance from the parameterised shape to the keep-out/in zone.
     """
-    shape = parameterisation.create_shape()
-    # Note that we do not discretise by edges here, as the number of
-    # points must remain constant so the size of constraint vectors
-    # remain constant.
-    s = shape.discretise(n_shape_discr, byedges=False).xz
+    # Use native coordinate discretization when available to avoid CAD wire
+    # creation and CAD-level curve discretization in the inner loop.
+    if hasattr(parameterisation, "discretise_coords"):
+        s = parameterisation.discretise_coords(n_shape_discr).xz
+    else:
+        shape = parameterisation.create_shape()
+        # Note that we do not discretise by edges here, as the number of
+        # points must remain constant so the size of constraint vectors
+        # remain constant.
+        s = shape.discretise(n_shape_discr, byedges=False).xz
     return signed_distance_2D_polygon(s.T, zone_points.T).T
 
 
