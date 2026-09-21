@@ -203,19 +203,21 @@ def optimise_geometry(
     The result of the optimisation.
     """
     geom = copy.deepcopy(geom)
+    context = _tools.GeomOptimisationContext(geom)
     dimensions = geom.variables.n_free_variables
-    f_obj = _tools.to_objective(f_objective, geom)
+    f_obj = _tools.to_objective(f_objective, geom, context=context)
     if df_objective is not None:
-        df_obj = _tools.to_optimiser_callable(df_objective, geom)
+        df_obj = _tools.to_optimiser_callable(df_objective, geom, context=context)
     else:
         df_obj = None
     ineq_constraints_list = list(ineq_constraints)
     ineq_constraints_list.extend([
-        _tools.make_keep_out_zone_constraint(_to_koz(zone)) for zone in keep_out_zones
+        _tools.make_keep_out_zone_constraint(_to_koz(zone), context=context)
+        for zone in keep_out_zones
     ])
 
-    ineq_constraints = _tools.get_shape_ineq_constraint(geom) + [
-        _tools.to_constraint(c, geom) for c in ineq_constraints_list
+    ineq_constraints = _tools.get_shape_ineq_constraint(geom, context=context) + [
+        _tools.to_constraint(c, geom, context=context) for c in ineq_constraints_list
     ]
     result = optimise(
         f_obj,
@@ -226,7 +228,9 @@ def optimise_geometry(
         opt_conditions=opt_conditions,
         opt_parameters=opt_parameters,
         bounds=(np.zeros(dimensions), np.ones(dimensions)),
-        eq_constraints=[_tools.to_constraint(c, geom) for c in eq_constraints],
+        eq_constraints=[
+            _tools.to_constraint(c, geom, context=context) for c in eq_constraints
+        ],
         ineq_constraints=ineq_constraints,
         keep_history=keep_history,
         check_constraints=check_constraints,

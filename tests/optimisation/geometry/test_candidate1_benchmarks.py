@@ -317,3 +317,102 @@ class TestCandidate1Benchmarks:
         print(f"  Speedup:             {speedup:.1f}x")
 
         assert speedup >= 5.0
+
+    def test_task_5_1_multi_callback_context_benchmark(self):
+        """
+        Benchmark Task 5.1: Multi-callback state caching context in geometry optimisation.
+        """
+        from bluemira.geometry.optimisation import (
+            GeomOptimisationContext,
+            KeepOutZone,
+            make_keep_out_zone_constraint,
+            optimise_geometry,
+            wire_length_objective,
+        )
+        from bluemira.geometry.tools import make_circle
+
+        z1 = make_circle(radius=2.0, center=(13.0, 0, 0), axis=(0, 1, 0))
+        z2 = make_circle(radius=2.0, center=(12.0, 4, 0), axis=(0, 1, 0))
+        z3 = make_circle(radius=2.0, center=(12.0, -4, 0), axis=(0, 1, 0))
+
+        # Benchmark 1: PictureFrame (exercises CAD fallback caching across multiple callbacks)
+        g_no_ctx = PictureFrame()
+        c1 = make_keep_out_zone_constraint(KeepOutZone(z1))["f_constraint"]
+        c2 = make_keep_out_zone_constraint(KeepOutZone(z2))["f_constraint"]
+        x_pf = g_no_ctx.variables.get_normalised_values()
+
+        n_evals_pf = 20
+        t0 = time.perf_counter()
+        for _ in range(n_evals_pf):
+            g_no_ctx.clear_cache()
+            g_no_ctx.variables.set_values_from_norm(x_pf)
+            _ = wire_length_objective(g_no_ctx)
+            _ = c1(g_no_ctx)
+            _ = c2(g_no_ctx)
+        t_pf_no_ctx = time.perf_counter() - t0
+
+        g_ctx = PictureFrame()
+        ctx_pf = GeomOptimisationContext(g_ctx)
+        c1_ctx = make_keep_out_zone_constraint(KeepOutZone(z1), context=ctx_pf)["f_constraint"]
+        c2_ctx = make_keep_out_zone_constraint(KeepOutZone(z2), context=ctx_pf)["f_constraint"]
+
+        t0 = time.perf_counter()
+        for _ in range(n_evals_pf):
+            ctx_pf.update_x(x_pf)
+            _ = wire_length_objective(g_ctx)
+            _ = c1_ctx(g_ctx)
+            _ = c2_ctx(g_ctx)
+        t_pf_ctx = time.perf_counter() - t0
+
+        speedup_pf = t_pf_no_ctx / t_pf_ctx
+        print(f"\n[Task 5.1 Benchmark - PictureFrame] {n_evals_pf} multi-callback evaluations (obj + 2 KOZ):")
+        print(f"  Uncached:        {t_pf_no_ctx * 1e3:.2f} ms ({t_pf_no_ctx / n_evals_pf * 1e3:.2f} ms/eval)")
+        print(f"  Context-Cached:  {t_pf_ctx * 1e3:.2f} ms ({t_pf_ctx / n_evals_pf * 1e3:.2f} ms/eval)")
+        print(f"  Speedup:         {speedup_pf:.1f}x")
+
+        # Benchmark 2: PrincetonD (exercises pure-NumPy coordinate caching across callbacks)
+        geom_no_ctx = PrincetonD()
+        koz1 = make_keep_out_zone_constraint(KeepOutZone(z1))["f_constraint"]
+        koz2 = make_keep_out_zone_constraint(KeepOutZone(z2))["f_constraint"]
+        koz3 = make_keep_out_zone_constraint(KeepOutZone(z3))["f_constraint"]
+        x_pd = geom_no_ctx.variables.get_normalised_values()
+        n_evals_pd = 100
+
+        t0 = time.perf_counter()
+        for _ in range(n_evals_pd):
+            geom_no_ctx.variables.set_values_from_norm(x_pd)
+            _ = wire_length_objective(geom_no_ctx)
+            geom_no_ctx.variables.set_values_from_norm(x_pd)
+            _ = koz1(geom_no_ctx)
+            geom_no_ctx.variables.set_values_from_norm(x_pd)
+            _ = koz2(geom_no_ctx)
+            geom_no_ctx.variables.set_values_from_norm(x_pd)
+            _ = koz3(geom_no_ctx)
+        t_no_ctx = time.perf_counter() - t0
+
+        geom_ctx = PrincetonD()
+        ctx_pd = GeomOptimisationContext(geom_ctx)
+        koz1_ctx = make_keep_out_zone_constraint(KeepOutZone(z1), context=ctx_pd)["f_constraint"]
+        koz2_ctx = make_keep_out_zone_constraint(KeepOutZone(z2), context=ctx_pd)["f_constraint"]
+        koz3_ctx = make_keep_out_zone_constraint(KeepOutZone(z3), context=ctx_pd)["f_constraint"]
+
+        t0 = time.perf_counter()
+        for _ in range(n_evals_pd):
+            ctx_pd.update_x(x_pd)
+            _ = wire_length_objective(geom_ctx)
+            ctx_pd.update_x(x_pd)
+            _ = koz1_ctx(geom_ctx)
+            ctx_pd.update_x(x_pd)
+            _ = koz2_ctx(geom_ctx)
+            ctx_pd.update_x(x_pd)
+            _ = koz3_ctx(geom_ctx)
+        t_ctx = time.perf_counter() - t0
+
+        speedup_pd = t_no_ctx / t_ctx
+        print(f"\n[Task 5.1 Benchmark - PrincetonD] {n_evals_pd} multi-callback evaluations (obj + 3 KOZ):")
+        print(f"  Uncached:        {t_no_ctx * 1e3:.2f} ms ({t_no_ctx / n_evals_pd * 1e3:.3f} ms/eval)")
+        print(f"  Context-Cached:  {t_ctx * 1e3:.2f} ms ({t_ctx / n_evals_pd * 1e3:.3f} ms/eval)")
+        print(f"  Speedup:         {speedup_pd:.1f}x")
+
+        assert speedup_pf >= 2.5
+        assert speedup_pd >= 1.05

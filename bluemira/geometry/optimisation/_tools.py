@@ -69,8 +69,42 @@ def wire_length_objective(geom: GeometryParameterisation) -> float:
     return float(geom.create_shape().length)
 
 
+class GeomOptimisationContext:
+    """
+    Context that caches parameterisation state and discretized coordinates across
+    multiple callbacks (objective, gradient, constraints, keep-out zones) evaluated
+    at the same parameter vector x during an optimisation iteration.
+    """
+
+    def __init__(self, geom: GeometryParameterisation):
+        self.geom = geom
+        self._last_x: np.ndarray | None = None
+        self._coords_cache: dict[int, Any] = {}
+
+    def update_x(self, x: np.ndarray):
+        """Update geometry parameter values if x has changed, clearing coordinates cache."""
+        if self._last_x is not None and np.array_equal(x, self._last_x):
+            return
+        self._last_x = np.array(x, copy=True)
+        self.geom.variables.set_values_from_norm(x)
+        self._coords_cache.clear()
+
+    def get_coords(self, n_points: int) -> Any:
+        """Get discretized coordinates, cached for the current x and resolution."""
+        if n_points not in self._coords_cache:
+            if hasattr(self.geom, "discretise_coords"):
+                self._coords_cache[n_points] = self.geom.discretise_coords(n_points)
+            else:
+                self._coords_cache[n_points] = self.geom.create_shape().discretise(
+                    n_points, byedges=False
+                )
+        return self._coords_cache[n_points]
+
+
 def to_objective(
-    geom_objective: GeomOptimiserObjective, geom: GeometryParameterisation
+    geom_objective: GeomOptimiserObjective,
+    geom: GeometryParameterisation,
+    context: GeomOptimisationContext | None = None,
 ) -> ObjectiveCallable:
     """Convert a geometry objective function to a normal objective function.
 
@@ -79,16 +113,19 @@ def to_objective(
     :
         The objective function converted from a geometry objective function.
     """
+    ctx = context or GeomOptimisationContext(geom)
 
     def f(x):
-        geom.variables.set_values_from_norm(x)
+        ctx.update_x(x)
         return geom_objective(geom)
 
     return f
 
 
 def to_optimiser_callable(
-    geom_callable: GeomOptimiserCallable, geom: GeometryParameterisation
+    geom_callable: GeomOptimiserCallable,
+    geom: GeometryParameterisation,
+    context: GeomOptimisationContext | None = None,
 ) -> OptimiserCallable:
     """
     Convert a geometry optimiser function to a normal optimiser function.
@@ -100,16 +137,19 @@ def to_optimiser_callable(
     :
         The optimiser function converted from a geometry optimiser function.
     """
+    ctx = context or GeomOptimisationContext(geom)
 
     def f(x):
-        geom.variables.set_values_from_norm(x)
+        ctx.update_x(x)
         return geom_callable(geom)
 
     return f
 
 
 def to_optimiser_callable_from_cls(
-    geom_callable: GeomClsOptimiserCallable, geom: GeometryParameterisation
+    geom_callable: GeomClsOptimiserCallable,
+    geom: GeometryParameterisation,
+    context: GeomOptimisationContext | None = None,
 ) -> OptimiserCallable:
     """
     Convert a geometry optimiser function to a normal optimiser function.
@@ -121,16 +161,19 @@ def to_optimiser_callable_from_cls(
     :
         The optimiser function converted from a geometry optimiser function.
     """
+    ctx = context or GeomOptimisationContext(geom)
 
     def f(x):
-        geom.variables.set_values_from_norm(x)
+        ctx.update_x(x)
         return geom_callable()
 
     return f
 
 
 def to_constraint(
-    geom_constraint: GeomConstraintT, geom: GeometryParameterisation
+    geom_constraint: GeomConstraintT,
+    geom: GeometryParameterisation,
+    context: GeomOptimisationContext | None = None,
 ) -> ConstraintT:
     """Convert a geometry constraint to a normal one.
 
@@ -139,8 +182,11 @@ def to_constraint(
     :
         The consatraint constructed from the geometry constraint.
     """
+    ctx = context or GeomOptimisationContext(geom)
     constraint: ConstraintT = {
-        "f_constraint": to_optimiser_callable(geom_constraint["f_constraint"], geom),
+        "f_constraint": to_optimiser_callable(
+            geom_constraint["f_constraint"], geom, context=ctx
+        ),
         "df_constraint": None,
         "tolerance": geom_constraint["tolerance"],
     }
@@ -148,7 +194,9 @@ def to_constraint(
         constraint["name"] = name
 
     if df_constraint := geom_constraint.get("df_constraint", None):
-        constraint["df_constraint"] = to_optimiser_callable(df_constraint, geom)
+        constraint["df_constraint"] = to_optimiser_callable(
+            df_constraint, geom, context=ctx
+        )
     return constraint
 
 
@@ -156,6 +204,7 @@ def calculate_signed_distance(
     parameterisation: GeometryParameterisation,
     n_shape_discr: int,
     zone_points: np.ndarray,
+    context: GeomOptimisationContext | None = None,
 ) -> np.ndarray:
     """
     Signed distance from the parameterised shape to the keep-out/in zone.
@@ -165,9 +214,11 @@ def calculate_signed_distance(
     :
         Signed distance from the parameterised shape to the keep-out/in zone.
     """
-    # Use native coordinate discretization when available to avoid CAD wire
+    # Use context or native coordinate discretization when available to avoid CAD wire
     # creation and CAD-level curve discretization in the inner loop.
-    if hasattr(parameterisation, "discretise_coords"):
+    if context is not None:
+        s = context.get_coords(n_shape_discr).xz
+    elif hasattr(parameterisation, "discretise_coords"):
         s = parameterisation.discretise_coords(n_shape_discr).xz
     else:
         shape = parameterisation.create_shape()
@@ -178,7 +229,10 @@ def calculate_signed_distance(
     return signed_distance_2D_polygon(s.T, zone_points.T).T
 
 
-def make_keep_out_zone_constraint(koz: KeepOutZone) -> GeomConstraintT:
+def make_keep_out_zone_constraint(
+    koz: KeepOutZone,
+    context: GeomOptimisationContext | None = None,
+) -> GeomConstraintT:
     """Make a keep-out zone inequality constraint from a wire.
 
     Returns
@@ -204,7 +258,7 @@ def make_keep_out_zone_constraint(koz: KeepOutZone) -> GeomConstraintT:
 
     def _f_constraint(geom: GeometryParameterisation) -> np.ndarray:
         return calculate_signed_distance(
-            geom, n_shape_discr=shape_n_discr, zone_points=koz_points
+            geom, n_shape_discr=shape_n_discr, zone_points=koz_points, context=context
         )
 
     return {
@@ -221,6 +275,7 @@ def make_minimum_distance_constraint(
     n_points: int = 100,
     tol: float = 1e-8,
     name: str = "minimum_distance",
+    context: GeomOptimisationContext | None = None,
 ) -> GeomConstraintT:
     """
     Make an inequality constraint enforcing a minimum clearance distance:
@@ -241,6 +296,8 @@ def make_minimum_distance_constraint(
         Constraint tolerance for the optimizer.
     name:
         Name for the constraint.
+    context:
+        Optional geometry optimisation context for caching across callbacks.
 
     Returns
     -------
@@ -250,7 +307,11 @@ def make_minimum_distance_constraint(
     target_pts = _extract_2d_points(target, n_points)
 
     def _f_constraint(geom: GeometryParameterisation) -> np.ndarray:
-        dist = fast_2d_distance(geom, target_pts, n_points=n_points)
+        if context is not None:
+            pts = context.get_coords(n_points)
+            dist = fast_2d_distance(pts, target_pts, n_points=n_points)
+        else:
+            dist = fast_2d_distance(geom, target_pts, n_points=n_points)
         return np.array([min_distance - dist])
 
     return {
@@ -260,7 +321,10 @@ def make_minimum_distance_constraint(
     }
 
 
-def get_shape_ineq_constraint(geom: GeometryParameterisation) -> list[ConstraintT]:
+def get_shape_ineq_constraint(
+    geom: GeometryParameterisation,
+    context: GeomOptimisationContext | None = None,
+) -> list[ConstraintT]:
     """
     Retrieve the inequality constraints registered for the given parameterisation.
 
@@ -274,11 +338,15 @@ def get_shape_ineq_constraint(geom: GeometryParameterisation) -> list[Constraint
     if geom.n_ineq_constraints < 1:
         return []
     if df_constraint := getattr(geom, "df_ineq_constraint", None):
-        df_constraint = to_optimiser_callable_from_cls(df_constraint, geom)
+        df_constraint = to_optimiser_callable_from_cls(
+            df_constraint, geom, context=context
+        )
     return [
         {
             "name": geom.name,
-            "f_constraint": to_optimiser_callable_from_cls(geom.f_ineq_constraint, geom),
+            "f_constraint": to_optimiser_callable_from_cls(
+                geom.f_ineq_constraint, geom, context=context
+            ),
             "df_constraint": df_constraint,
             "tolerance": geom.tolerance,
         }

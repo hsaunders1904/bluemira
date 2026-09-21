@@ -7,6 +7,8 @@
 
 from bluemira.geometry.optimisation._optimise import KeepOutZone, optimise_geometry
 from bluemira.geometry.optimisation._tools import (
+    GeomOptimisationContext,
+    make_keep_out_zone_constraint,
     make_minimum_distance_constraint,
     wire_length_objective,
 )
@@ -21,10 +23,12 @@ from bluemira.geometry.optimisation.typed import (
 __all__ = [
     "GeomClsOptimiserCallable",
     "GeomConstraintT",
+    "GeomOptimisationContext",
     "GeomOptimisationProblem",
     "GeomOptimiserCallable",
     "GeomOptimiserObjective",
     "KeepOutZone",
+    "make_keep_out_zone_constraint",
     "make_minimum_distance_constraint",
     "optimise_geometry",
     "wire_length_objective",
