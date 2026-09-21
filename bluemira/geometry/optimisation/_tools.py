@@ -42,6 +42,28 @@ class KeepOutZone:
     """The tolerance for the keep-out zone constraint."""
 
 
+def wire_length_objective(geom: GeometryParameterisation) -> float:
+    """
+    Standard objective function evaluating perimeter wire length.
+
+    Leverages lightweight pure-NumPy calculate_length if available on the
+    parameterisation, falling back to CAD wire length.
+
+    Parameters
+    ----------
+    geom:
+        The geometry parameterisation being evaluated.
+
+    Returns
+    -------
+    float:
+        The perimeter length of the geometry [m].
+    """
+    if hasattr(geom, "calculate_length"):
+        return geom.calculate_length()
+    return float(geom.create_shape().length)
+
+
 def to_objective(
     geom_objective: GeomOptimiserObjective, geom: GeometryParameterisation
 ) -> ObjectiveCallable:

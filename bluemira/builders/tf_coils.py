@@ -500,6 +500,8 @@ class RippleConstrainedLengthGOP(GeomOptimisationProblem):
         """
         Objective function (minimise length)
         """  # noqa: DOC201
+        if hasattr(parameterisation, "calculate_length"):
+            return parameterisation.calculate_length()
         return parameterisation.create_shape().length
 
     def keep_out_zones(self) -> list[KeepOutZone]:

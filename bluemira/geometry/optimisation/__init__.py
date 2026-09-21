@@ -6,6 +6,7 @@
 """Optimisation for geometry"""
 
 from bluemira.geometry.optimisation._optimise import KeepOutZone, optimise_geometry
+from bluemira.geometry.optimisation._tools import wire_length_objective
 from bluemira.geometry.optimisation.problem import GeomOptimisationProblem
 from bluemira.geometry.optimisation.typed import (
     GeomClsOptimiserCallable,
@@ -22,4 +23,5 @@ __all__ = [
     "GeomOptimiserObjective",
     "KeepOutZone",
     "optimise_geometry",
+    "wire_length_objective",
 ]

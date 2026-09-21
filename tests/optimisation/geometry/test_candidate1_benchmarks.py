@@ -149,3 +149,42 @@ class TestCandidate1Benchmarks:
 
         assert rel_error < 1e-4
         assert speedup >= 10.0
+
+    def test_task_3_2_wire_length_objective_benchmark(self):
+        """
+        Benchmark Task 3.2: Native wire_length_objective vs CAD wire length lambda.
+        """
+        from bluemira.builders.tf_coils import RippleConstrainedLengthGOP
+        from bluemira.geometry.optimisation import wire_length_objective
+
+        geom = PrincetonD()
+        n_evals = 20
+
+        # CAD wire lambda objective timing (clearing cache to simulate uncached CAD wire rebuild)
+        t0 = time.perf_counter()
+        cad_len = 0.0
+        for _ in range(n_evals):
+            geom.clear_cache()
+            cad_len = geom.create_shape().length
+        cad_time = time.perf_counter() - t0
+
+        # Native wire_length_objective timing
+        t0 = time.perf_counter()
+        opt_len = 0.0
+        for _ in range(n_evals):
+            opt_len = wire_length_objective(geom)
+        opt_time = time.perf_counter() - t0
+
+        # RippleConstrainedLengthGOP.objective timing
+        builder_len = RippleConstrainedLengthGOP.objective(geom)
+
+        speedup = cad_time / opt_time
+        print(f"\n[Task 3.2 Benchmark] {n_evals} wire_length_objective evaluations:")
+        print(f"  CAD wire lambda:                   {cad_time * 1e3:.2f} ms ({cad_time / n_evals * 1e3:.2f} ms/eval)")
+        print(f"  wire_length_objective:             {opt_time * 1e3:.2f} ms ({opt_time / n_evals * 1e3:.4f} ms/eval)")
+        print(f"  RippleConstrainedLengthGOP.objective: {builder_len:.4f} m")
+        print(f"  Speedup:                           {speedup:.1f}x")
+
+        assert abs(opt_len - cad_len) / cad_len < 1e-4
+        assert abs(builder_len - cad_len) / cad_len < 1e-4
+        assert speedup >= 10.0
