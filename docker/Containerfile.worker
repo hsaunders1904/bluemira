@@ -12,7 +12,7 @@ FROM mambaorg/micromamba:ubuntu24.04
 
 USER root
 
-# Install system dependencies (build tools, git, curl, graphviz, libgl for vtk/graphics)
+# Install system dependencies (build tools, git, curl, graphviz, libgl/libxft for graphics & gmsh)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
+    libxft2 \
     openssh-client \
     sudo \
     && rm -rf /var/lib/apt/lists/*
@@ -40,6 +41,15 @@ RUN ARCH=$(uname -m) && \
 RUN curl -fsSL https://pixi.sh/install.sh | bash && \
     mv /root/.pixi/bin/pixi /usr/local/bin/pixi
 
+# Install Bluemira conda environment and dependencies
+COPY conda /tmp/conda
+COPY requirements /tmp/requirements
+RUN sed '/-e \.\./d' /tmp/conda/environment.yml > /tmp/conda/env_deps.yml && \
+    micromamba create -y -n bluemira -f /tmp/conda/env_deps.yml && \
+    /opt/conda/envs/bluemira/bin/pip install --no-cache-dir pytest-xdist 'freegsnke>=3.1.0' && \
+    micromamba clean --all --yes && \
+    rm -rf /tmp/conda /tmp/requirements
+
 # Configure non-root user
 ARG USERNAME=worker
 ARG USER_UID=1000
@@ -56,18 +66,28 @@ RUN if id -u $USER_UID >/dev/null 2>&1; then \
     useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USERNAME && \
     echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/nopasswd
 
-# Setup workspace directory
+# Setup workspace directory and install Bluemira
 WORKDIR /workspace
-RUN chown -R $USERNAME:$USERNAME /workspace
+COPY --chown=$USERNAME:$USERNAME . /workspace
+RUN /opt/conda/envs/bluemira/bin/pip install --no-cache-dir --no-deps -e '.[openmc]' && \
+    chown -R $USERNAME:$USERNAME /opt/conda/envs/bluemira/lib/python3.12/site-packages
+
+# Initialize shell configuration for worker
+RUN echo 'eval "$(/bin/micromamba shell hook --shell bash)"' >> /home/$USERNAME/.bashrc && \
+    echo 'micromamba activate bluemira' >> /home/$USERNAME/.bashrc
 
 USER $USERNAME
 
 # Environment settings
-ENV PYTHONNOUSERSITE="1" \
+ENV ENV_NAME="bluemira" \
+    MAMBA_DEFAULT_ENV="bluemira" \
+    CONDA_DEFAULT_ENV="bluemira" \
+    CONDA_PREFIX="/opt/conda/envs/bluemira" \
+    PYTHONNOUSERSITE="1" \
     LANG="C.UTF-8" \
     LC_ALL="C.UTF-8" \
     PYTHONIOENCODING="utf-8" \
     BLUEMIRA_GEOMETRY_BACKEND="cadquery" \
-    PATH="/usr/local/bin:/home/$USERNAME/.local/bin:$PATH"
+    PATH="/opt/conda/envs/bluemira/bin:/usr/local/bin:/home/$USERNAME/.local/bin:$PATH"
 
 CMD ["/bin/bash"]

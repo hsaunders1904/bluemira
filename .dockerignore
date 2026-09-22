@@ -1,6 +1,6 @@
 .venv
 .github
-conda
+.worktrees
 data
 documentation
 examples

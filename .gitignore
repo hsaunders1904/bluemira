@@ -205,3 +205,10 @@ bluemira/_version.py
 # Beads tracking
 .beads/
 
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
