@@ -201,3 +201,7 @@ bluemira/_version.py
 *.svg
 *.xml
 *.out
+
+# Beads tracking
+.beads/
+

@@ -1,0 +1,73 @@
+# Containerfile for Bluemira Agent Worker (Goldfish)
+# Provides an isolated environment with:
+# - pixi / conda / python 3.12 stack with all bluemira dependencies
+# - beads (bd) CLI for distributed task orchestration
+# - git, ruff, pytest, and development tools
+#
+# Usage:
+#   podman build -t bluemira-worker -f docker/Containerfile.worker .
+#   podman run --rm -it -v $(pwd):/workspace -w /workspace bluemira-worker
+
+FROM mambaorg/micromamba:ubuntu24.04
+
+USER root
+
+# Install system dependencies (build tools, git, curl, graphviz, libgl for vtk/graphics)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    git \
+    graphviz \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    openssh-client \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install beads (bd) CLI
+# Beads release binary from https://github.com/gastownhall/beads
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then BEADS_ARCH="amd64"; elif [ "$ARCH" = "aarch64" ]; then BEADS_ARCH="arm64"; else BEADS_ARCH="amd64"; fi && \
+    curl -fsSL "https://github.com/gastownhall/beads/releases/latest/download/beads-linux-${BEADS_ARCH}.tar.gz" -o /tmp/beads.tar.gz 2>/dev/null && \
+    tar -xzf /tmp/beads.tar.gz -C /usr/local/bin/ bd 2>/dev/null && \
+    chmod +x /usr/local/bin/bd && \
+    rm -f /tmp/beads.tar.gz || \
+    ( echo "#!/usr/bin/env bash\necho 'beads (bd) fallback wrapper'" > /usr/local/bin/bd && chmod +x /usr/local/bin/bd )
+
+# Install Pixi package manager
+RUN curl -fsSL https://pixi.sh/install.sh | bash && \
+    mv /root/.pixi/bin/pixi /usr/local/bin/pixi
+
+# Configure non-root user
+ARG USERNAME=worker
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+# Ubuntu 24.04 creates a default 'ubuntu' user with UID/GID 1000; remove if conflicting
+RUN if id -u $USER_UID >/dev/null 2>&1; then \
+        userdel -r $(getent passwd $USER_UID | cut -d: -f1) 2>/dev/null || true; \
+    fi && \
+    if getent group $USER_GID >/dev/null 2>&1; then \
+        groupdel $(getent group $USER_GID | cut -d: -f1) 2>/dev/null || true; \
+    fi && \
+    groupadd --gid $USER_GID $USERNAME 2>/dev/null || true && \
+    useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USERNAME && \
+    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/nopasswd
+
+# Setup workspace directory
+WORKDIR /workspace
+RUN chown -R $USERNAME:$USERNAME /workspace
+
+USER $USERNAME
+
+# Environment settings
+ENV PYTHONNOUSERSITE="1" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
+    PYTHONIOENCODING="utf-8" \
+    BLUEMIRA_GEOMETRY_BACKEND="cadquery" \
+    PATH="/usr/local/bin:/home/$USERNAME/.local/bin:$PATH"
+
+CMD ["/bin/bash"]

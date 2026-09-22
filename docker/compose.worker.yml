@@ -1,0 +1,47 @@
+# Podman / Docker Compose definition for Bluemira Agent Workers (Goldfish)
+#
+# Provides isolated container environments for agent workers executing
+# atomic tasks under git worktrees.
+#
+# Usage with Podman:
+#   podman compose -f docker/compose.worker.yml run --rm worker
+#
+# Or run an agent targeting a specific task and worktree:
+#   WORKTREE_DIR=.worktrees/feature-step-1 podman compose -f docker/compose.worker.yml run --rm worker
+
+services:
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Containerfile.worker
+    image: localhost/bluemira-worker:latest
+    container_name: bluemira-agent-worker
+    userns_mode: keep-id
+    security_opt:
+      - label=disable
+    volumes:
+      # Mount entire repository including .worktrees and .beads
+      - ..:/workspace:z
+      # Cache pixi and pip caches across container runs
+      - worker-cache:/home/worker/.cache:z
+    working_dir: /workspace
+    environment:
+      - PYTHONNOUSERSITE=1
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - PYTHONIOENCODING=utf-8
+      - BLUEMIRA_GEOMETRY_BACKEND=cadquery
+      # Worktree path inside container if executing against a specific slice
+      - WORKTREE_DIR=${WORKTREE_DIR:-.}
+    command: /bin/bash
+
+  worker-beads:
+    extends:
+      service: worker
+    container_name: bluemira-agent-worker-beads
+    # Convenience profile that initializes or syncs beads tasks
+    command: /bin/bash -c "bd ready && /bin/bash"
+
+volumes:
+  worker-cache:
+    name: bluemira-worker-cache
