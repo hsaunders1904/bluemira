@@ -11,13 +11,18 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 from eqdsk import EQDSKInterface
+from eqdsk.cocos import COCOS
 from matplotlib import pyplot as plt
 
 from bluemira.base.file import get_bluemira_path, try_get_bluemira_private_data_root
 from bluemira.equilibria.coils import CoilGroup, CoilSet
 from bluemira.equilibria.coils._coil import Coil
 from bluemira.equilibria.diagnostics import EqBPlotParam
-from bluemira.equilibria.equilibrium import Equilibrium, FixedPlasmaEquilibrium
+from bluemira.equilibria.equilibrium import (
+    Breakdown,
+    Equilibrium,
+    FixedPlasmaEquilibrium,
+)
 from bluemira.equilibria.find import find_OX_points, interpolate_psi
 from bluemira.equilibria.grid import Grid
 from bluemira.equilibria.optimisation.constraints import (
@@ -679,3 +684,86 @@ class TestFixedPlasmaEquilibrium:
     )
     def test_plotting(self, field):
         self.eq.plot(field=field)
+
+
+class TestCOCOSTracking:
+    """Tests for COCOS convention tracking on equilibria and profile objects."""
+
+    def test_default_cocos(self):
+        grid = Grid(1.0, 10.0, -10.0, 10.0, 50, 50)
+        coils = [Coil(2.0, 4.0, 0.5, 1.0, ctype="PF")]
+        coilset = CoilSet(*coils)
+        profiles = BetaIpProfile(1.0, 10e6, 6.0, 6.0)
+
+        eq = Equilibrium(coilset, grid, profiles)
+        assert eq.cocos == COCOS.C3
+        assert eq.cocos.index == 3
+        assert profiles.cocos == COCOS.C3
+        assert profiles.cocos.index == 3
+
+    def test_custom_cocos_init_and_setter(self):
+        grid = Grid(1.0, 10.0, -10.0, 10.0, 50, 50)
+        coils = [Coil(2.0, 4.0, 0.5, 1.0, ctype="PF")]
+        coilset = CoilSet(*coils)
+        profiles = BetaIpProfile(1.0, 10e6, 6.0, 6.0, cocos=11)
+        assert profiles.cocos == COCOS.C11
+
+        eq = Equilibrium(coilset, grid, profiles, cocos="11")
+        assert eq.cocos == COCOS.C11
+
+        eq.cocos = COCOS.C7
+        assert eq.cocos == COCOS.C7
+        assert eq.cocos.index == 7
+
+        eq.cocos = 3
+        assert eq.cocos == COCOS.C3
+
+        profiles.cocos = "13"
+        assert profiles.cocos == COCOS.C13
+
+    def test_breakdown_cocos(self):
+        grid = Grid(1.0, 10.0, -10.0, 10.0, 50, 50)
+        coils = [Coil(2.0, 4.0, 0.5, 1.0, ctype="PF")]
+        coilset = CoilSet(*coils)
+
+        bd = Breakdown(coilset, grid, cocos=11)
+        assert bd.cocos == COCOS.C11
+        bd.cocos = 3
+        assert bd.cocos == COCOS.C3
+
+    def test_from_eqdsk_cocos(self, eq_data):
+        eq1 = Equilibrium.from_eqdsk(eq_data, from_cocos=7)
+        eq2 = Equilibrium.from_eqdsk(eq_data, from_cocos="7")
+        eq3 = Equilibrium.from_eqdsk(eq_data, from_cocos=COCOS.C7)
+        assert eq1.cocos == COCOS.C3
+        assert eq2.cocos == COCOS.C3
+        assert eq3.cocos == COCOS.C3
+        assert eq1.profiles.cocos == COCOS.C3
+
+    def test_to_dict_and_to_eqdsk_cocos(self, eq_ng, tmp_path):
+        d_enum = eq_ng.to_dict(to_cocos=COCOS.C5)
+        d_str = eq_ng.to_dict(to_cocos="5")
+        d_int = eq_ng.to_dict(to_cocos=5)
+        assert compare_dicts(d_enum, d_str, almost_equal=True)
+        assert compare_dicts(d_enum, d_int, almost_equal=True)
+
+        eq_ng.to_eqdsk(
+            directory=tmp_path,
+            filename="test_cocos_out.json",
+            to_cocos=COCOS.C5,
+        )
+        loaded = Equilibrium.from_eqdsk(
+            Path(tmp_path, "test_cocos_out.json"),
+            from_cocos=COCOS.C5,
+        )
+        assert loaded.cocos == COCOS.C3
+
+    def test_custom_profile_cocos(self, eq_data):
+        e = EQDSKInterface.from_file(eq_data, from_cocos=7, to_cocos=3)
+        p1 = CustomProfile.from_eqdsk(e, cocos=COCOS.C3)
+        assert p1.cocos == COCOS.C3
+        p2 = CustomProfile.from_eqdsk(e, cocos=11)
+        assert p2.cocos == COCOS.C11
+
+        p3 = CustomProfile.from_eqdsk_file(eq_data, from_cocos=COCOS.C7, to_cocos="3")
+        assert p3.cocos == COCOS.C3

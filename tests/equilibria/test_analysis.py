@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import pytest
+from eqdsk.cocos import COCOS
 from matplotlib.pyplot import Axes
 
 from bluemira.base.error import BluemiraError
@@ -229,3 +230,30 @@ class TestMultiEqAnalysis:
                 ],
                 legs_to_plot=DivLegsToPlot.UP,
             )
+
+
+class TestCOCOSAnalysis:
+    """Tests for COCOS options in analysis loading functions."""
+
+    def test_select_eq_cocos_types(self):
+        eq1 = select_eq(single_demoish_path, from_cocos=7)
+        eq2 = select_eq(single_demoish_path, from_cocos="7")
+        eq3 = select_eq(single_demoish_path, from_cocos=COCOS.C7)
+        assert eq1.cocos == COCOS.C3
+        assert eq2.cocos == COCOS.C3
+        assert eq3.cocos == COCOS.C3
+
+    def test_select_multi_eqs_cocos_types(self):
+        paths = [masty_path, double_demoish_path, single_demoish_path]
+        dict1 = select_multi_eqs(
+            paths,
+            from_cocos=[COCOS.C3, "3", 7],
+            qpsi_positive=[False, False, None],
+        )
+        assert len(dict1) == 3
+        dict2 = select_multi_eqs(
+            paths,
+            from_cocos=COCOS.C3,
+            qpsi_positive=[False, False, None],
+        )
+        assert len(dict2) == 3

@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numba as nb
 import numpy as np
 from eqdsk import EQDSKInterface
+from eqdsk.cocos import COCOS
 from scipy.integrate import quad
 from scipy.interpolate import RectBivariateSpline, interp1d
 from scipy.optimize import curve_fit
@@ -381,6 +382,20 @@ class Profile(ABC):
 
     R_0: float
 
+    def __init__(self, *, cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS):
+        self._cocos: COCOS = COCOS(cocos) if not isinstance(cocos, COCOS) else cocos
+
+    @property
+    def cocos(self) -> COCOS:
+        """
+        The COCOS convention of the Profile.
+        """
+        return self._cocos
+
+    @cocos.setter
+    def cocos(self, value: int | str | COCOS):
+        self._cocos = COCOS(value) if not isinstance(value, COCOS) else value
+
     def _scalar_denorm(self, prime, norm):
         """
         Convert from integral in psi_norm to integral in psi
@@ -574,6 +589,8 @@ class BetaIpProfile(Profile):
         Toroidal field at reactor major radius [T]
     shape:
         Shape parameterisation to use
+    cocos:
+        The COCOS convention of the Profile.
 
     Notes
     -----
@@ -598,7 +615,10 @@ class BetaIpProfile(Profile):
         R_0: float,
         B_0: float,
         shape: ShapeFunction | None = None,
+        *,
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
     ):
+        super().__init__(cocos=cocos)
         self.betap = betap
         self.I_p = I_p
         self._fvac = R_0 * B_0
@@ -742,6 +762,8 @@ class BetaLiIpProfile(BetaIpProfile):
         carried out. Usually best not to start solving the equilibrium
         with the profile constraint, and fold it in later, when the plasma
         shape is more representative.
+    cocos:
+        The COCOS convention of the Profile.
     """
 
     def __init__(
@@ -754,8 +776,10 @@ class BetaLiIpProfile(BetaIpProfile):
         shape: ShapeFunction | None = None,
         li_rel_tol: float = 0.015,
         li_min_iter: int = 5,
+        *,
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
     ):
-        super().__init__(betap, I_p, R_0, B_0, shape=shape)
+        super().__init__(betap, I_p, R_0, B_0, shape=shape, cocos=cocos)
         self._l_i_target = l_i
         self._l_i_rel_tol = li_rel_tol
         self._l_i_min_iter = li_min_iter
@@ -776,9 +800,15 @@ class CustomProfile(Profile):
         Reactor major radius [m]
     B_0:
         Field at major radius [T]
+    p_func:
+        Pressure profile p(psi_N)
+    f_func:
+        f profile f(psi_N)
     I_p:
         Plasma current [A]. If None, the plasma current will be calculated
         from p' and ff'.
+    cocos:
+        The COCOS convention of the Profile.
     """
 
     def __init__(
@@ -790,7 +820,10 @@ class CustomProfile(Profile):
         p_func: npt.NDArray[np.float64] | Callable[[float]] | float | None = None,
         f_func: npt.NDArray[np.float64] | Callable[[float]] | float | None = None,
         I_p: float | None = None,
+        *,
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
     ):
+        super().__init__(cocos=cocos)
         self._pprime_in = self.parse_to_callable(pprime_func)
         self._ffprime_in = self.parse_to_callable(ffprime_func)
         self.p_func = self.parse_to_callable(p_func)
@@ -896,29 +929,35 @@ class CustomProfile(Profile):
     def from_eqdsk_file(
         cls,
         filename: Path | str,
-        from_cocos: int | None = 11,
-        to_cocos: int | None = BLUEMIRA_DEFAULT_COCOS,
+        from_cocos: int | str | COCOS | None = 11,
+        to_cocos: int | str | COCOS | None = BLUEMIRA_DEFAULT_COCOS,
         *,
+        cocos: int | str | COCOS | None = None,
         qpsi_positive: bool | None = None,
         **kwargs,
     ) -> CustomProfile:
         """
         Initialises a CustomProfile object from an eqdsk file
         """  # noqa: DOC201
+        from_cocos_idx = COCOS(from_cocos).index if from_cocos is not None else None
+        to_cocos_idx = COCOS(to_cocos).index if to_cocos is not None else None
         e = EQDSKInterface.from_file(
             filename,
-            from_cocos=from_cocos,
-            to_cocos=to_cocos,
+            from_cocos=from_cocos_idx,
+            to_cocos=to_cocos_idx,
             qpsi_positive=qpsi_positive,
             **kwargs,
         )
-        return cls.from_eqdsk(e)
+        return cls.from_eqdsk(e, cocos=cocos)
 
     @classmethod
-    def from_eqdsk(cls, eq: EQDSKInterface) -> CustomProfile:
+    def from_eqdsk(
+        cls, eq: EQDSKInterface, cocos: int | str | COCOS | None = None
+    ) -> CustomProfile:
         """
         Initialises a CustomProfile object from an eqdsk object
         """  # noqa: DOC201
+        profile_cocos = cocos if cocos is not None else eq.cocos
         return cls(
             eq.pprime,
             eq.ffprime,
@@ -927,4 +966,5 @@ class CustomProfile(Profile):
             p_func=eq.pressure,
             f_func=eq.fpol,
             I_p=abs(eq.cplasma),
+            cocos=profile_cocos,
         )
