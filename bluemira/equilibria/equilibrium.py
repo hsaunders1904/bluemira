@@ -106,6 +106,7 @@ class MHDState:
         self,
         grid: Grid,
         *,
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         o_point_fallback: OPointCalcOptions = OPointCalcOptions.GRID_CENTRE,
     ):
         # Constructors
@@ -115,8 +116,20 @@ class MHDState:
         self.dz: float | None = None
         self.set_grid(grid)
         self.limiter: Limiter | None = None
+        self._cocos: COCOS = COCOS(cocos) if not isinstance(cocos, COCOS) else cocos
         self._o_point_fallback = o_point_fallback
         self._label: str | None = None
+
+    @property
+    def cocos(self) -> COCOS:
+        """
+        The COCOS convention of the MHD state.
+        """
+        return self._cocos
+
+    @cocos.setter
+    def cocos(self, value: int | str | COCOS):
+        self._cocos = COCOS(value) if not isinstance(value, COCOS) else value
 
     @property
     def label(self) -> str:
@@ -147,7 +160,7 @@ class MHDState:
     def _get_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | None = 11,
+        from_cocos: int | str | COCOS | None = 11,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -187,9 +200,10 @@ class MHDState:
         limiter:
             Limiter instance if any limiters are in file
         """
+        from_cocos_idx = COCOS(from_cocos).index if from_cocos is not None else None
         e = EQDSKInterface.from_file(
             filename,
-            from_cocos=from_cocos,
+            from_cocos=from_cocos_idx,
             to_cocos=BLUEMIRA_DEFAULT_COCOS,
             qpsi_positive=qpsi_positive,
             **kwargs,
@@ -281,9 +295,14 @@ class FixedPlasmaEquilibrium(MHDState):
         filename: Path | str | None = None,
         *,
         label: str = "Fixed Plasma Equilibrium",
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         o_point_fallback: OPointCalcOptions = OPointCalcOptions.GRID_CENTRE,
     ):
-        super().__init__(grid, o_point_fallback=o_point_fallback)
+        super().__init__(
+            grid,
+            cocos=cocos,
+            o_point_fallback=o_point_fallback,
+        )
         # We just need the flux values, not the locations
         o_points = [Opoint(0.0, 0.0, psi_ax)]
         x_points = [Xpoint(0.0, 0.0, psi_b)]
@@ -308,7 +327,7 @@ class FixedPlasmaEquilibrium(MHDState):
     def from_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | None = 11,
+        from_cocos: int | str | COCOS | None = 11,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -360,6 +379,7 @@ class FixedPlasmaEquilibrium(MHDState):
             psi_ax=psi_ax,
             psi_b=psi_b,
             filename=filename,
+            cocos=e.cocos,
         )
         self._eqdsk = e
         return self
@@ -371,12 +391,13 @@ class FixedPlasmaEquilibrium(MHDState):
         header="bluemira_equilibria",
         directory=None,
         filetype="json",
-        to_cocos=BLUEMIRA_DEFAULT_COCOS,
+        to_cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         **kwargs,
     ):
         """
         Writes the FixedPlasmaEquilibrium Object to an eqdsk file
         """
+        to_cocos_obj = COCOS(to_cocos) if not isinstance(to_cocos, COCOS) else to_cocos
         eqdsk = super()._prepare_eqdsk(
             data,
             filename,
@@ -384,8 +405,8 @@ class FixedPlasmaEquilibrium(MHDState):
             directory,
             filetype,
         )
-        eqdsk.identify(as_cocos=BLUEMIRA_DEFAULT_COCOS, qpsi_positive=False)
-        eqdsk = eqdsk.to_cocos(to_cocos)
+        eqdsk.identify(as_cocos=self.cocos.index, qpsi_positive=False)
+        eqdsk = eqdsk.to_cocos(to_cocos_obj.index)
         eqdsk.write(self.filename.as_posix(), file_format=filetype, **kwargs)
 
     def get_LCFS(self) -> Coordinates:
@@ -513,9 +534,14 @@ class CoilSetMHDState(MHDState):
         grid: Grid,
         coilset: CoilSet,
         *,
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         o_point_fallback: OPointCalcOptions = OPointCalcOptions.GRID_CENTRE,
     ):
-        super().__init__(grid, o_point_fallback=o_point_fallback)
+        super().__init__(
+            grid,
+            cocos=cocos,
+            o_point_fallback=o_point_fallback,
+        )
         self._psi_cache_valid = False
         self._bx_cache_valid = False
         self._bz_cache_valid = False
@@ -535,7 +561,7 @@ class CoilSetMHDState(MHDState):
     def _get_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | None = 11,
+        from_cocos: int | str | COCOS | None = 11,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -726,9 +752,17 @@ class Breakdown(CoilSetMHDState):
         grid: Grid,
         psi: npt.NDArray[np.float64] | None = None,
         filename: Path | str | None = None,
+        *,
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
+        o_point_fallback: OPointCalcOptions = OPointCalcOptions.GRID_CENTRE,
         **kwargs,
     ):
-        super().__init__(grid, coilset)
+        super().__init__(
+            grid,
+            coilset,
+            cocos=cocos,
+            o_point_fallback=o_point_fallback,
+        )
         self._set_init_plasma(grid, psi)
         self.plasma = NoPlasmaCoil(grid)
         self.limiter = kwargs.get("limiter")
@@ -742,7 +776,7 @@ class Breakdown(CoilSetMHDState):
     def from_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | None = 11,
+        from_cocos: int | str | COCOS | None = 11,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -780,7 +814,7 @@ class Breakdown(CoilSetMHDState):
         qpsi_positive = False if qpsi_positive is None else qpsi_positive
         eqdsk, grid, _, coilset, limiter = super()._get_eqdsk(
             filename,
-            from_cocos,
+            from_cocos=from_cocos,
             qpsi_positive=qpsi_positive,
             force_symmetry=force_symmetry,
             user_coils=user_coils,
@@ -789,7 +823,14 @@ class Breakdown(CoilSetMHDState):
             **kwargs,
         )
 
-        self = cls(coilset, grid, limiter=limiter, psi=eqdsk.psi, filename=filename)
+        self = cls(
+            coilset,
+            grid,
+            limiter=limiter,
+            psi=eqdsk.psi,
+            filename=filename,
+            cocos=eqdsk.cocos,
+        )
         self._eqdsk = eqdsk
         return self
 
@@ -862,12 +903,13 @@ class Breakdown(CoilSetMHDState):
         header: str = "bluemira_breakdown",
         directory: str | None = None,
         filetype: str = "json",
-        to_cocos: int = BLUEMIRA_DEFAULT_COCOS,
+        to_cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         **kwargs,
     ):
         """
         Writes the Breakdown Object to an eqdsk file
         """
+        to_cocos_obj = COCOS(to_cocos) if not isinstance(to_cocos, COCOS) else to_cocos
         data = self.to_dict()
         # Remove Items can not be saved in eqdsk
         for key in ["Bx", "By", "Bz", "Bp"]:
@@ -885,7 +927,7 @@ class Breakdown(CoilSetMHDState):
             filetype,
         )
         # Can not use identify method for breakdown, so assume input
-        eqdsk._cocos = COCOS(to_cocos)
+        eqdsk._cocos = to_cocos_obj
         eqdsk.write(self.filename.as_posix(), file_format=filetype, **kwargs)
 
     def set_breakdown_point(self, x_bd: float, z_bd: float):
@@ -1159,10 +1201,16 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
         jtor: npt.NDArray[np.float64] | None = None,
         filename: Path | str | None = None,
         label: str = "Equilibrium",
+        cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         o_point_fallback: OPointCalcOptions = OPointCalcOptions.GRID_CENTRE,
     ):
         self.force_symmetry: bool = force_symmetry
-        super().__init__(grid, coilset, o_point_fallback=o_point_fallback)
+        super().__init__(
+            grid,
+            coilset,
+            cocos=cocos,
+            o_point_fallback=o_point_fallback,
+        )
         # Constructors
         self._jtor = jtor
         self.profiles = profiles
@@ -1194,7 +1242,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
     def from_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | None = 11,
+        from_cocos: int | str | COCOS | None = 11,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -1278,6 +1326,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
             jtor=jtor,
             filename=filename,
             o_point_fallback=o_point_fallback,
+            cocos=e.cocos,
         )
 
         self._eqdsk = e
@@ -1287,7 +1336,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
     def to_dict(
         self,
         qpsi_calcmode: int | QpsiCalcMode = QpsiCalcMode.NO_CALC,
-        to_cocos: int = BLUEMIRA_DEFAULT_COCOS,
+        to_cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
     ) -> dict[str, Any]:
         """
         Creates dictionary for equilibrium object, in preparation for saving
@@ -1297,6 +1346,8 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
         ----------
         qpsi_calcmode:
           don't calculate: 0, calculate qpsi: 1, fill with zeros: 2
+        to_cocos:
+          Target COCOS index or enum for dictionary export
 
         Returns
         -------
@@ -1304,6 +1355,8 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
             A dictionary of the Equilibrium object values, sufficient for EQDSK
         """
         qpsi_calcmode = QpsiCalcMode(qpsi_calcmode)
+        to_cocos_obj = COCOS(to_cocos) if not isinstance(to_cocos, COCOS) else to_cocos
+        to_cocos_idx = to_cocos_obj.index
 
         psi = self.psi()
         n_x, n_z = psi.shape
@@ -1315,7 +1368,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
 
         if qpsi_calcmode is QpsiCalcMode.CALC:
             # This is too damn slow..
-            sign = -1 if to_cocos in {3, 4, 5, 6, 13, 14, 15, 16} else 1
+            sign = -1 if to_cocos_idx in {3, 4, 5, 6, 13, 14, 15, 16} else 1
             q = sign * self.q(psinorm, o_points=opoints, x_points=xpoints)
         elif qpsi_calcmode is QpsiCalcMode.ZEROS:
             q = np.zeros(n_x)
@@ -1386,25 +1439,27 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
         directory: str | None = None,
         filetype: str = "json",
         qpsi_calcmode: int | QpsiCalcMode = QpsiCalcMode.NO_CALC,
-        to_cocos: int = BLUEMIRA_DEFAULT_COCOS,
+        to_cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
         **kwargs,
     ):
         """
         Writes the Equilibrium Object to an eqdsk file
         """
+        to_cocos_obj = COCOS(to_cocos) if not isinstance(to_cocos, COCOS) else to_cocos
+        to_cocos_idx = to_cocos_obj.index
         qpsi_calcmode = QpsiCalcMode(qpsi_calcmode)
         if "eqdsk" in filetype and qpsi_calcmode is QpsiCalcMode.NO_CALC:
             qpsi_calcmode = QpsiCalcMode.ZEROS
 
         eqdsk = super()._prepare_eqdsk(
-            self.to_dict(qpsi_calcmode, to_cocos),
+            self.to_dict(qpsi_calcmode, to_cocos_idx),
             filename,
             header,
             directory,
             filetype,
         )
-        eqdsk.identify(as_cocos=BLUEMIRA_DEFAULT_COCOS, qpsi_positive=False)
-        eqdsk = eqdsk.to_cocos(to_cocos)
+        eqdsk.identify(as_cocos=self.cocos.index, qpsi_positive=False)
+        eqdsk = eqdsk.to_cocos(to_cocos_idx)
         eqdsk.write(self.filename.as_posix(), file_format=filetype, **kwargs)
 
     def __getstate__(self):

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+from eqdsk.cocos import COCOS
 from matplotlib.gridspec import GridSpec
 from tabulate import tabulate
 
@@ -58,7 +59,7 @@ def select_eq(
     file_path: str,
     fixed_or_free: FixedOrFree = FixedOrFree.FREE,
     dummy_coils: CoilSet | None = None,
-    from_cocos: int = BLUEMIRA_DEFAULT_COCOS,
+    from_cocos: int | str | COCOS = BLUEMIRA_DEFAULT_COCOS,
     qpsi_positive: bool | None = None,  # noqa: FBT001
     control: CoilType | list[str] | None = None,
 ) -> FixedPlasmaEquilibrium | Equilibrium:
@@ -118,7 +119,7 @@ def select_multi_eqs(
     fixed_or_free: FixedOrFree = FixedOrFree.FREE,
     equilibrium_names: str | Sequence[str] | None = None,
     dummy_coils: Sequence | None = None,
-    from_cocos: int | Iterable[int] = BLUEMIRA_DEFAULT_COCOS,
+    from_cocos: int | str | COCOS | Iterable[int | str | COCOS] = BLUEMIRA_DEFAULT_COCOS,
     *,
     qpsi_positive: bool | Iterable[bool | None] | None = None,
     control_coils: CoilType | list[str] | None = None,
@@ -177,8 +178,10 @@ def select_multi_eqs(
         raise ValueError(
             "dummy_coils list length not equal to the number of equilibria."
         )
-    if is_num(from_cocos):
-        from_cocos = np.ones(len(equilibrium_input)) * from_cocos
+    if isinstance(from_cocos, (int, str, COCOS)):
+        from_cocos = [from_cocos] * len(equilibrium_input)
+    elif len(from_cocos) != len(equilibrium_input):
+        raise ValueError("from_cocos length not equal to the number of equilibria.")
     if isinstance(qpsi_positive, bool | None):
         qpsi_positive = len(equilibrium_input) * [qpsi_positive]
     if equilibrium_names is None:
