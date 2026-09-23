@@ -18,9 +18,13 @@ from bluemira.equilibria.find import (
 from bluemira.equilibria.freegsnke_bridge import (
     ForwardGSSolver,
     ForwardSolveResult,
+    InverseGSSolver,
+    InverseSolveResult,
     coilset_to_freegsnke_tokamak,
+    constraints_to_freegsnke,
     profile_to_freegsnke,
     run_forward_solve,
+    run_inverse_solve,
     update_bluemira_from_freegsnke,
 )
 from bluemira.equilibria.grid import Grid
@@ -44,10 +48,13 @@ __all__ = [
     "ForwardGSSolver",
     "ForwardSolveResult",
     "Grid",
+    "InverseGSSolver",
+    "InverseSolveResult",
     "Limiter",
     "PicardIterator",
     "SymmetricCircuit",
     "coilset_to_freegsnke_tokamak",
+    "constraints_to_freegsnke",
     "find_LCFS_separatrix",
     "find_OX_points",
     "find_flux_surfs",
@@ -56,5 +63,6 @@ __all__ = [
     "flux_surface_manickam",
     "profile_to_freegsnke",
     "run_forward_solve",
+    "run_inverse_solve",
     "update_bluemira_from_freegsnke",
 ]
