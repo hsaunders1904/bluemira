@@ -165,40 +165,53 @@ def coilset_to_freegsnke_tokamak(
     Raises
     ------
     EquilibriaError
-        If neither limiter nor grid boundary is provided.
+        If coilset is empty or neither limiter nor grid boundary is provided.
     """
-    active_coils_data = {}
-    coil_currents = {}
+    if not coilset._coils:
+        raise EquilibriaError("Cannot convert an empty CoilSet to FreeGSNKE Machine.")
 
-    for name, item in coilset.items():
-        if isinstance(item, (Circuit, SymmetricCircuit)):
-            r_coords = [float(coil.x) for coil in item.coils]
-            z_coords = [float(coil.z) for coil in item.coils]
-            dr_coords = [float(2 * coil.dx) for coil in item.coils]
-            dz_coords = [float(2 * coil.dz) for coil in item.coils]
-            current = float(item.current)
-            active_coils_data[name] = {
-                "R": r_coords,
-                "Z": z_coords,
-                "dR": dr_coords,
-                "dZ": dz_coords,
-            }
-            coil_currents[name] = current
-        elif isinstance(item, Coil):
-            r = float(item.x)
-            z = float(item.z)
-            dr = float(2 * item.dx)
-            dz = float(2 * item.dz)
-            current = float(item.current)
-            active_coils_data[name] = {
-                "R": [r],
-                "Z": [z],
-                "dR": [dr],
-                "dZ": [dz],
-            }
-            coil_currents[name] = current
+    active_coils_data: dict[str, Any] = {}
+    coil_currents: dict[str, float] = {}
 
-    if limiter is not None:
+    for idx, element in enumerate(coilset._coils):
+        if isinstance(element, (Circuit, SymmetricCircuit)):
+            elem_name = (
+                element.name if isinstance(element.name, str) else f"circuit_{idx}"
+            )
+            circuit_dict: dict[str, Any] = {}
+            for sub_idx, subcoil in enumerate(element._coils):
+                sub_name = (
+                    subcoil.name if getattr(subcoil, "name", None) else f"sub_{sub_idx}"
+                )
+                if sub_name in circuit_dict:
+                    sub_name = f"{sub_name}_{sub_idx}"
+                circuit_dict[sub_name] = {
+                    "R": [float(subcoil.x)],
+                    "Z": [float(subcoil.z)],
+                    "dR": float(2.0 * subcoil.dx),
+                    "dZ": float(2.0 * subcoil.dz),
+                    "resistivity": 1.68e-8,
+                    "polarity": 1.0,
+                    "multiplier": 1.0,
+                }
+            active_coils_data[elem_name] = circuit_dict
+            coil_currents[elem_name] = float(np.asarray(element.current).flat[0])
+        elif isinstance(element, Coil):
+            elem_name = element.name or f"coil_{idx}"
+            active_coils_data[elem_name] = {
+                "R": [float(element.x)],
+                "Z": [float(element.z)],
+                "dR": float(2.0 * element.dx),
+                "dZ": float(2.0 * element.dz),
+                "resistivity": 1.68e-8,
+                "polarity": 1.0,
+                "multiplier": 1.0,
+            }
+            coil_currents[elem_name] = float(np.asarray(element.current).flat[0])
+        else:
+            bluemira_warn(f"Skipping unsupported coil element of type {type(element)}")
+
+    if limiter is not None and hasattr(limiter, "x") and len(limiter.x) > 0:
         limiter_data = [
             {"R": float(r), "Z": float(z)}
             for r, z in zip(limiter.x, limiter.z, strict=False)
@@ -245,7 +258,7 @@ def coilset_to_freegsnke_tokamak(
 def profile_to_freegsnke(
     profile: Profile,
     freegsnke_eq: FreeGSNKE_Equilibrium,
-    num_points: int = 100,
+    num_points: int = 101,
 ) -> GeneralPprimeFFprime:
     """
     Convert a Bluemira Profile into a FreeGSNKE GeneralPprimeFFprime profile.
@@ -301,37 +314,43 @@ def update_bluemira_from_freegsnke(
     freegsnke_profiles: GeneralPprimeFFprime,
 ) -> None:
     """
-    Map FreeGSNKE solve state back onto a Bluemira Equilibrium object.
+    Transfer converged solution state from FreeGSNKE back into Bluemira Equilibrium.
+
+    Updates the internal plasma state, updates toroidal current density, and
+    refreshes critical points and boundary topology. Both Bluemira and FreeGSNKE
+    represent poloidal flux in Wb/rad.
 
     Parameters
     ----------
     bluemira_eq:
         Bluemira Equilibrium to update in-place.
     freegsnke_eq:
-        Solved FreeGSNKE Equilibrium instance.
+        Converged FreeGSNKE Equilibrium instance.
     freegsnke_profiles:
-        FreeGSNKE plasma profile from solve.
+        FreeGSNKE Profile instance containing computed toroidal current density.
     """
-    psi_total = freegsnke_eq.psi()
-    bluemira_eq._psi = psi_total.copy()
-    bluemira_eq.grid._psi = psi_total.copy()
+    bluemira_plasma_psi = np.asarray(freegsnke_eq.plasma_psi, dtype=np.float64).copy()
+    jtor = np.asarray(freegsnke_profiles.jtor, dtype=np.float64).copy()
 
-    bluemira_eq._psi_axis = float(freegsnke_eq.psi_axis)
-    bluemira_eq._psi_boundary = float(freegsnke_eq.psi_bndry)
+    bluemira_eq._update_plasma(bluemira_plasma_psi, jtor)
+    bluemira_eq._jtor = jtor
 
-    psi_1d = np.ascontiguousarray(bluemira_eq.grid.psi.flatten())
-    bluemira_eq._p = freegsnke_profiles.pressure(psi_1d)
-    bluemira_eq._fpol = freegsnke_profiles.fpol(psi_1d)
-    bluemira_eq._pprime = freegsnke_profiles.pprime(psi_1d)
-    bluemira_eq._ffprime = freegsnke_profiles.ffprime(psi_1d)
+    if hasattr(freegsnke_eq, "_current") and freegsnke_eq._current is not None:
+        bluemira_eq._I_p = float(freegsnke_eq._current)
 
-    j_tor = np.asarray(freegsnke_eq.jtor(), dtype=np.float64)
-    bluemira_eq._j_tor = j_tor.copy()
+    if hasattr(freegsnke_eq, "psi_axis") and freegsnke_eq.psi_axis is not None:
+        bluemira_eq.psi_ax = float(freegsnke_eq.psi_axis)
 
-    total_ip = float(freegsnke_eq.plasmaCurrent())
-    bluemira_eq._I_p = total_ip
+    if hasattr(freegsnke_eq, "psi_bndry") and freegsnke_eq.psi_bndry is not None:
+        bluemira_eq.psi_b = float(freegsnke_eq.psi_bndry)
 
-    bluemira_eq._recompute_fields()
+    bluemira_eq._plasmacoil = None
+    bluemira_eq._clear_OX_points()
+
+    try:
+        bluemira_eq.get_OX_points(force_update=True)
+    except Exception as exc:  # noqa: BLE001
+        bluemira_warn(f"Could not automatically detect OX points following solve: {exc}")
 
 
 def run_forward_solve(

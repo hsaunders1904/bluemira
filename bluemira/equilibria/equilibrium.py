@@ -49,6 +49,10 @@ from bluemira.equilibria.flux_surfaces import (
     CoreResults,
     analyse_plasma_core,
 )
+from bluemira.equilibria.freegsnke_bridge import (
+    run_forward_solve,
+    run_inverse_solve,
+)
 from bluemira.equilibria.grad_shafranov import GSSolver
 from bluemira.equilibria.grid import Grid, integrate_dx_dz
 from bluemira.equilibria.limiter import Limiter
@@ -73,9 +77,19 @@ from bluemira.optimisation import optimise
 from bluemira.utilities.tools import abs_rel_difference
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from matplotlib.axes import Axes
 
     from bluemira.equilibria.find import Lpoint
+    from bluemira.equilibria.freegsnke_bridge import (
+        ForwardSolveResult,
+        InverseSolveResult,
+    )
+    from bluemira.equilibria.optimisation.constraints import (
+        MagneticConstraint,
+        MagneticConstraintSet,
+    )
 
 
 class VerticalPositionControlType(Enum):
@@ -160,7 +174,7 @@ class MHDState:
     def _get_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | str | COCOS | None = 11,
+        from_cocos: int | str | COCOS | None = None,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -327,7 +341,7 @@ class FixedPlasmaEquilibrium(MHDState):
     def from_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | str | COCOS | None = 11,
+        from_cocos: int | str | COCOS | None = None,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -561,7 +575,7 @@ class CoilSetMHDState(MHDState):
     def _get_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | str | COCOS | None = 11,
+        from_cocos: int | str | COCOS | None = None,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -776,7 +790,7 @@ class Breakdown(CoilSetMHDState):
     def from_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | str | COCOS | None = 11,
+        from_cocos: int | str | COCOS | None = None,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -1242,7 +1256,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
     def from_eqdsk(
         cls,
         filename: Path | str,
-        from_cocos: int | str | COCOS | None = 11,
+        from_cocos: int | str | COCOS | None = None,
         *,
         qpsi_positive: bool | None = None,
         full_coil: bool = False,
@@ -1738,6 +1752,149 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
 
         except StopIteration:
             pass
+
+    def forward_solve(
+        self,
+        *,
+        target_relative_tolerance: float = 1e-6,
+        max_iterations: int = 100,
+        order: int = 2,
+        force_up_down_symmetric: bool | None = None,
+        picard_handover: float = 0.11,
+        verbose: bool = False,
+        suppress: bool = True,
+        **kwargs: Any,
+    ) -> ForwardSolveResult:
+        """
+        Execute FreeGSNKE static forward Grad-Shafranov solve on this Equilibrium.
+
+        Parameters
+        ----------
+        target_relative_tolerance:
+            Relative residual convergence threshold. Default is 1e-6.
+        max_iterations:
+            Maximum solver iterations. Default is 100.
+        order:
+            Spatial finite-difference operator order (2 or 4). Default is 2.
+        force_up_down_symmetric:
+            Whether to enforce up-down symmetry. If None, uses self.force_symmetry.
+        picard_handover:
+            Picard to Newton-Krylov handover threshold. Default is 0.11.
+        verbose:
+            Print iteration diagnostics. Default is False.
+        suppress:
+            Suppress FreeGSNKE console output. Default is True.
+        **kwargs:
+            Additional arguments forwarded to FreeGSNKE solver.
+
+        Returns
+        -------
+        ForwardSolveResult
+            Convergence metrics and diagnostics.
+        """
+        return run_forward_solve(
+            self,
+            target_relative_tolerance=target_relative_tolerance,
+            max_iterations=max_iterations,
+            order=order,
+            force_up_down_symmetric=force_up_down_symmetric,
+            picard_handover=picard_handover,
+            verbose=verbose,
+            suppress=suppress,
+            **kwargs,
+        )
+
+    def inverse_solve(
+        self,
+        constraints: (
+            MagneticConstraintSet
+            | list[MagneticConstraint | Any]
+            | MagneticConstraint
+            | None
+        ) = None,
+        *,
+        target_relative_tolerance: float = 1e-5,
+        max_iterations: int = 100,
+        max_iter_per_update: int = 5,
+        picard_handover: float = 0.15,
+        order: int = 2,
+        force_up_down_symmetric: bool | None = None,
+        callback: Callable[[int, Any, float], None] | None = None,
+        weight_isoflux: float = 1.0,
+        weight_nulls: float = 1.0,
+        weight_psi: float = 1.0,
+        weight_fields: float = 1.0,
+        mu_coils: float = 1e5,
+        mu_forces: float = 1e4,
+        verbose: bool = False,
+        suppress: bool = True,
+        **kwargs: Any,
+    ) -> InverseSolveResult:
+        """
+        Execute FreeGSNKE static inverse Grad-Shafranov solve on this Equilibrium.
+
+        Parameters
+        ----------
+        constraints:
+            Magnetic constraints (MagneticConstraintSet, list, or single constraint).
+        target_relative_tolerance:
+            Relative convergence tolerance. Default is 1e-5.
+        max_iterations:
+            Maximum outer solving iterations. Default is 100.
+        max_iter_per_update:
+            Inner forward solve iterations per coil update. Default is 5.
+        picard_handover:
+            Picard to Newton-Krylov handover threshold. Default is 0.15.
+        order:
+            Spatial finite-difference operator order (2 or 4). Default is 2.
+        force_up_down_symmetric:
+            Whether to enforce up-down symmetry. If None, uses self.force_symmetry.
+        callback:
+            Optional hook called after each outer iteration: callback(iter, eq, res).
+        weight_isoflux:
+            Weight for isoflux constraints. Default is 1.0.
+        weight_nulls:
+            Weight for null point constraints. Default is 1.0.
+        weight_psi:
+            Weight for direct psi value constraints. Default is 1.0.
+        weight_fields:
+            Weight for magnetic field target constraints. Default is 1.0.
+        mu_coils:
+            Penalty factor for coil current limit violations. Default is 1e5.
+        mu_forces:
+            Penalty factor for coil force limit violations. Default is 1e4.
+        verbose:
+            Print iteration diagnostics.
+        suppress:
+            Suppress FreeGSNKE console output.
+        **kwargs:
+            Additional arguments forwarded to FreeGSNKE solver.
+
+        Returns
+        -------
+        InverseSolveResult
+            Convergence metrics, diagnostics, and optimized coil currents.
+        """
+        return run_inverse_solve(
+            self,
+            constraints=constraints,
+            target_relative_tolerance=target_relative_tolerance,
+            max_iterations=max_iterations,
+            max_iter_per_update=max_iter_per_update,
+            picard_handover=picard_handover,
+            order=order,
+            force_up_down_symmetric=force_up_down_symmetric,
+            callback=callback,
+            weight_isoflux=weight_isoflux,
+            weight_nulls=weight_nulls,
+            weight_psi=weight_psi,
+            weight_fields=weight_fields,
+            mu_coils=mu_coils,
+            mu_forces=mu_forces,
+            verbose=verbose,
+            suppress=suppress,
+            **kwargs,
+        )
 
     def _update_plasma(
         self, plasma_psi: npt.NDArray[np.float64], j_tor: npt.NDArray[np.float64]
