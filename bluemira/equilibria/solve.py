@@ -10,8 +10,9 @@ Picard iteration procedures for equilibria (and their infinite variations)
 
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,6 +26,8 @@ from bluemira.base.look_and_feel import (
 from bluemira.equilibria.constants import PSI_REL_TOL
 from bluemira.equilibria.diagnostics import PicardDiagnosticOptions
 from bluemira.equilibria.error import EquilibriaError
+from bluemira.equilibria.freegsnke_bridge import run_inverse_solve
+from bluemira.equilibria.optimisation.problem.base import CoilsetOptimiserResult
 from bluemira.optimisation.error import OptimisationError
 
 if TYPE_CHECKING:
@@ -33,7 +36,6 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
     from bluemira.equilibria.optimisation.problem import EqCoilsetOptimisationProblem
-    from bluemira.equilibria.optimisation.problem.base import CoilsetOptimiserResult
 
 __all__ = [
     "CunninghamConvergence",
@@ -443,18 +445,26 @@ class PicardIterator:
     ----------
     optimisation_problem:
         The optimisation problem to use when iterating
+    diagnostic_plotting:
+        PicardDiagnosticOptions - dataclass containing plot type or not plot option,
+        whether or not to make a GIF, the path where figures will be saved
+        and the plot name.
     convergence:
         The convergence criterion to use (defaults to Dudson)
+    backend:
+        Backend solver to use: 'freegsnke' (default) delegates to FreeGSNKE's
+        inverse optimizer with fallback to 'legacy', or 'legacy' for classic
+        Picard iteration loop.
     fixed_coils:
         Whether or not the coil positions are fixed
     relaxation:
         The relaxation parameter to use between iterations
     maxiter:
         The maximum number of iterations
-    diagnostic_plotting:
-        PicardDiagnosticOptions - dataclass containing plot type or not plot option,
-        whether or not to make a GIF, the path where figures will be saved
-        and the plot name.
+    keep_history:
+        Whether to keep optimisation history
+    check_constraints:
+        Whether to check constraints during optimisation
     """
 
     def __init__(
@@ -463,6 +473,7 @@ class PicardIterator:
         diagnostic_plotting: PicardDiagnosticOptions | None = None,
         convergence: ConvergenceCriterion | None = None,
         *,
+        backend: Literal["freegsnke", "legacy"] = "freegsnke",
         fixed_coils: bool = False,
         relaxation: float = 0,
         maxiter: int = 30,
@@ -472,6 +483,7 @@ class PicardIterator:
         self.eq = optimisation_problem.eq
         self.coilset = self.eq.coilset
         self.opt_prob = optimisation_problem
+        self.backend = backend
         if isinstance(convergence, ConvergenceCriterion):
             self.convergence = convergence
         elif convergence is None:
@@ -489,6 +501,85 @@ class PicardIterator:
         self.maxiter = maxiter
         self.diagnostic_plotting = diagnostic_plotting or PicardDiagnosticOptions()
         self.i = 0
+
+    def _extract_opt_problem_constraints(self) -> list[Any]:
+        """
+        Extract constraints and targets from the optimization problem.
+
+        Returns
+        -------
+        list[Any]
+            Flattened list of target and constraint specifications.
+        """
+        all_constraints: list[Any] = []
+        if hasattr(self.opt_prob, "targets") and self.opt_prob.targets is not None:
+            if hasattr(self.opt_prob.targets, "constraints"):
+                all_constraints.extend(self.opt_prob.targets.constraints)
+            else:
+                all_constraints.append(self.opt_prob.targets)
+        if hasattr(self.opt_prob, "constraints") and self.opt_prob.constraints:
+            all_constraints.extend(self.opt_prob.constraints)
+        return all_constraints
+
+    def _solve_freegsnke(self) -> CoilsetOptimiserResult | None:
+        """
+        Attempt to solve using FreeGSNKE inverse Grad-Shafranov solve.
+
+        Returns
+        -------
+        CoilsetOptimiserResult | None
+            The optimization result if solved via FreeGSNKE, or None if fallback
+            to legacy Picard iterator is required.
+        """
+        if not self.fixed_coils:
+            bluemira_warn(
+                "FreeGSNKE inverse solve requires fixed coil positions; "
+                "falling back to legacy Picard iterator."
+            )
+            return None
+
+        all_constraints = self._extract_opt_problem_constraints()
+        if not all_constraints:
+            bluemira_warn(
+                "No magnetic constraints or targets found for FreeGSNKE solve; "
+                "falling back to legacy Picard iterator."
+            )
+            return None
+
+        def _callback(iter_num: int, _freegs_eq: Any, _rel_change: float) -> None:
+            self.i = iter_num
+            if self.diagnostic_plotting:
+                with contextlib.suppress(Exception):
+                    self.diagnostic_plotting.update_figure(
+                        self.eq, self.convergence, iter_num
+                    )
+
+        tol = float(getattr(self.convergence, "tolerance", 1e-5))
+
+        try:
+            res = run_inverse_solve(
+                self.eq,
+                constraints=all_constraints,
+                target_relative_tolerance=tol,
+                max_iterations=self.maxiter,
+                callback=_callback,
+                suppress=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            bluemira_warn(
+                f"FreeGSNKE inverse solve delegation failed ({e}); "
+                "falling back to legacy Picard iterator."
+            )
+            return None
+
+        self._teardown()
+        return CoilsetOptimiserResult(
+            coilset=self.eq.coilset,
+            f_x=float(res.relative_error),
+            n_evals=int(res.iterations),
+            history=[],
+            constraints_satisfied=bool(res.converged),
+        )
 
     def _optimise_coilset(self):
         self.result = None
@@ -525,6 +616,12 @@ class PicardIterator:
         :
             The result
         """
+        if self.backend == "freegsnke":
+            freegs_res = self._solve_freegsnke()
+            if freegs_res is not None:
+                self.result = freegs_res
+                return self.result
+
         iterator = iter(self)
         while self.i < self.maxiter:
             try:
