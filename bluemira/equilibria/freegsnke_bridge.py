@@ -176,7 +176,9 @@ def coilset_to_freegsnke_tokamak(
     for idx, element in enumerate(coilset._coils):
         if isinstance(element, (Circuit, SymmetricCircuit)):
             elem_name = (
-                element.name if isinstance(element.name, str) else f"circuit_{idx}"
+                element.name
+                if isinstance(getattr(element, "name", None), str)
+                else f"circuit_{idx}"
             )
             circuit_dict: dict[str, Any] = {}
             for sub_idx, subcoil in enumerate(element._coils):
@@ -248,9 +250,18 @@ def coilset_to_freegsnke_tokamak(
 
     # Configure controllable coils for inverse solving
     ctrl = getattr(coilset, "control", None)
-    control_names = set(ctrl) if ctrl is not None else set(coil_currents.keys())
+    control_names = set(ctrl) if ctrl is not None else None
     for label, coil_elem in tokamak.coils:
-        coil_elem.control = bool(label in control_names)
+        if control_names is None:
+            coil_elem.control = True
+        else:
+            is_ctrl = label in control_names
+            if not is_ctrl and hasattr(coil_elem, "coils"):
+                is_ctrl = any(
+                    getattr(sc, "name", "") in control_names
+                    for sc in getattr(coil_elem, "coils", [])
+                )
+            coil_elem.control = is_ctrl
 
     return tokamak
 
@@ -607,6 +618,25 @@ def _extract_isoflux_constraint(c: IsofluxConstraint) -> list[np.ndarray]:
     return [rx, rz, rw]
 
 
+def _extract_null_constraint(
+    c: FieldNullConstraint,
+) -> tuple[list[float], list[float]]:
+    """
+    Extract (R, Z) coordinates for null point constraints.
+
+    Parameters
+    ----------
+    c:
+        The FieldNullConstraint instance.
+
+    Returns
+    -------
+    tuple[list[float], list[float]]
+        Lists of R and Z null coordinates.
+    """
+    return list(np.atleast_1d(c.x)), list(np.atleast_1d(c.z))
+
+
 def _extract_psi_constraint(
     c: PsiConstraint | PsiBoundaryConstraint,
 ) -> tuple[list[float], list[float], list[float]]:
@@ -707,12 +737,19 @@ def _extract_coil_current_limits(
 
     ctrl = getattr(coilset, "control", None)
     control_names = set(ctrl) if ctrl is not None else None
-    control_coils = [
-        coil
-        for coil in coilset
-        if getattr(coil, "control", True)
-        and (control_names is None or coil.name in control_names)
-    ]
+    coils_list = getattr(coilset, "_coils", coilset)
+    control_coils = []
+    for coil in coils_list:
+        if not getattr(coil, "control", True):
+            continue
+        c_names = getattr(coil, "name", "")
+        if control_names is not None:
+            if isinstance(c_names, list):
+                if not any(cn in control_names for cn in c_names):
+                    continue
+            elif c_names not in control_names:
+                continue
+        control_coils.append(coil)
     upper_limits: list[float | None] = []
     lower_limits: list[float | None] = []
     has_limits = False
@@ -766,6 +803,11 @@ def constraints_to_freegsnke(
     -------
     Inverse_optimizer
         FreeGSNKE Inverse_optimizer initialized with all mapped constraints.
+
+    Raises
+    ------
+    EquilibriaError
+        If no valid constraints are provided.
     """
     if isinstance(constraints, Inverse_optimizer):
         return constraints
@@ -794,8 +836,9 @@ def constraints_to_freegsnke(
         if isinstance(c, IsofluxConstraint):
             isoflux_sets.append(_extract_isoflux_constraint(c))
         elif isinstance(c, FieldNullConstraint):
-            r_null.extend(np.atleast_1d(c.x))
-            z_null.extend(np.atleast_1d(c.z))
+            rn, zn = _extract_null_constraint(c)
+            r_null.extend(rn)
+            z_null.extend(zn)
         elif isinstance(c, (PsiConstraint, PsiBoundaryConstraint)):
             rp, zp, pv = _extract_psi_constraint(c)
             r_psi.extend(rp)
@@ -854,6 +897,16 @@ def constraints_to_freegsnke(
         if r_field
         else None
     )
+
+    if (
+        not isoflux_set_arg
+        and not null_points_arg
+        and not psi_vals_arg
+        and not field_targets_arg
+    ):
+        raise EquilibriaError(
+            "No valid constraints found to pass to FreeGSNKE Inverse_optimizer."
+        )
 
     return Inverse_optimizer(
         isoflux_set=isoflux_set_arg,
@@ -1025,8 +1078,20 @@ def run_inverse_solve(
     for label, coil_elem in freegsnke_eq.tokamak.coils:
         curr = float(getattr(coil_elem, "current", 0.0))
         optimized_currents[label] = curr
-        if label in bluemira_eq.coilset:
-            bluemira_eq.coilset[label].current = curr
+
+    if hasattr(bluemira_eq, "coilset") and bluemira_eq.coilset is not None:
+        for idx, element in enumerate(bluemira_eq.coilset._coils):
+            elem_name = (
+                element.name
+                if isinstance(getattr(element, "name", None), str)
+                else f"circuit_{idx}"
+            )
+            if elem_name in optimized_currents:
+                element.current = optimized_currents[elem_name]
+            elif isinstance(element, Coil) and element.name in optimized_currents:
+                element.current = optimized_currents[element.name]
+            elif f"circuit_{idx}" in optimized_currents:
+                element.current = optimized_currents[f"circuit_{idx}"]
 
     rel_error = getattr(solver, "relative_change", float("nan"))
     norm_rel = getattr(solver, "norm_rel_change", [])
