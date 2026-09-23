@@ -100,16 +100,16 @@ limiter = Limiter(
 # Initial active coil currents (approximate pre-optimization values)
 circuit_currents = {
     "Solenoid": 5000.0,
-    "PX": 3696.81,
-    "D1": 6941.24,
-    "D2": 4390.86,
-    "D3": 2924.36,
-    "Dp": -2488.20,
-    "D5": 249.21,
-    "D6": -315.00,
-    "D7": 511.08,
-    "P4": -3564.38,
-    "P5": -3954.24,
+    "PX": 0.0,
+    "D1": 0.0,
+    "D2": 0.0,
+    "D3": 0.0,
+    "Dp": 0.0,
+    "D5": 0.0,
+    "D6": 0.0,
+    "D7": 0.0,
+    "P4": 0.0,
+    "P5": 0.0,
     "P6": 0.0,
 }
 

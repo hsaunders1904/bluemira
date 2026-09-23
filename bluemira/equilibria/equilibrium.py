@@ -1818,7 +1818,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
         max_iter_per_update: int = 5,
         picard_handover: float = 0.15,
         order: int = 2,
-        force_up_down_symmetric: bool | None = None,
+        force_up_down_symmetric: bool = False,
         callback: Callable[[int, Any, float], None] | None = None,
         weight_isoflux: float = 1.0,
         weight_nulls: float = 1.0,
@@ -1848,7 +1848,7 @@ class Equilibrium(CoilSetMHDState):  # noqa: PLR0904
         order:
             Spatial finite-difference operator order (2 or 4). Default is 2.
         force_up_down_symmetric:
-            Whether to enforce up-down symmetry. If None, uses self.force_symmetry.
+            Whether to enforce up-down symmetry. Default is False.
         callback:
             Optional hook called after each outer iteration: callback(iter, eq, res).
         weight_isoflux:
