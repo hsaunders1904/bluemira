@@ -248,7 +248,7 @@ class TestInverseSolve:
         result = run_inverse_solve(
             mastu_equilibrium,
             constraints=cset,
-            max_iterations=5,
+            max_iterations=20,
             target_relative_tolerance=1e-4,
             suppress=True,
         )
@@ -262,6 +262,49 @@ class TestInverseSolve:
         assert np.isfinite(result.psi_axis)
         assert np.isfinite(result.psi_boundary)
 
+    def test_run_inverse_solve_zero_initial_currents(self, mastu_equilibrium):
+        """Test that inverse solve updates coil currents when initialized to zero."""
+        rx, zx = 0.6, 1.1
+        nulls = FieldNullConstraint(x=np.array([rx, rx]), z=np.array([zx, -zx]))
+        isoflux = IsofluxConstraint(
+            x=np.array([0.34, 1.4, 1.0, 1.0]),
+            z=np.array([0.0, 0.0, 2.0, -2.0]),
+            ref_x=rx,
+            ref_z=zx,
+        )
+        cset = MagneticConstraintSet([nulls, isoflux])
+
+        control_names = [
+            n for n in mastu_equilibrium.coilset.name if not n.startswith("Solenoid")
+        ]
+        mastu_equilibrium.coilset.control = control_names
+
+        for circ in mastu_equilibrium.coilset._coils:
+            if any(cn in control_names for cn in circ.name):
+                circ.current = 0.0
+
+        result = run_inverse_solve(
+            mastu_equilibrium,
+            constraints=cset,
+            max_iterations=35,
+            target_relative_tolerance=1e-4,
+            suppress=True,
+        )
+
+        assert isinstance(result, InverseSolveResult)
+        assert result.converged
+        updated_currents = [
+            curr
+            for label, curr in result.coil_currents.items()
+            if not label.startswith("circuit_0")
+        ]
+        assert any(abs(c) > 100.0 for c in updated_currents)
+        bluemira_pf_currents = [
+            float(np.asarray(circ.current).flat[0])
+            for circ in mastu_equilibrium.coilset._coils[1:]
+        ]
+        assert any(abs(c) > 100.0 for c in bluemira_pf_currents)
+
     def test_equilibrium_inverse_solve_method(self, mastu_equilibrium):
         """Test calling inverse_solve directly on Equilibrium."""
         rx, zx = 0.6, 1.1
@@ -274,9 +317,13 @@ class TestInverseSolve:
         )
         cset = MagneticConstraintSet([nulls, isoflux])
 
+        mastu_equilibrium.coilset.control = [
+            n for n in mastu_equilibrium.coilset.name if not n.startswith("Solenoid")
+        ]
+
         res = mastu_equilibrium.inverse_solve(
             cset,
-            max_iterations=5,
+            max_iterations=20,
             target_relative_tolerance=1e-4,
             suppress=True,
         )

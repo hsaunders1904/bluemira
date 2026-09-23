@@ -129,6 +129,46 @@ class InverseSolveResult:
     coil_currents: dict[str, float]
 
 
+def _is_coil_element_controllable(
+    label: str,
+    coil_elem: Any,
+    control_names: set[str],
+    elem_map: dict[str, Any],
+) -> bool:
+    """
+    Check if a FreeGSNKE coil element should be marked as controllable.
+
+    Returns
+    -------
+    bool
+        True if the coil element or any of its subcoils is controllable.
+    """
+    if label in control_names:
+        return True
+    if label in elem_map:
+        bluemira_elem = elem_map[label]
+        be_names = getattr(bluemira_elem, "name", None)
+        if isinstance(be_names, (list, tuple)):
+            if any(cn in control_names for cn in be_names):
+                return True
+        elif isinstance(be_names, str) and be_names in control_names:
+            return True
+        if hasattr(bluemira_elem, "_coils") and any(
+            getattr(sc, "name", None) in control_names
+            for sc in getattr(bluemira_elem, "_coils", [])
+        ):
+            return True
+    if hasattr(coil_elem, "coils"):
+        for sc in getattr(coil_elem, "coils", []):
+            sc_name = sc[0] if isinstance(sc, tuple) else getattr(sc, "name", "")
+            if sc_name in control_names:
+                return True
+            suffix = sc_name[len(label) :]
+            if sc_name.startswith(label) and suffix in control_names:
+                return True
+    return False
+
+
 def coilset_to_freegsnke_tokamak(
     coilset: CoilSet,
     limiter: Limiter | None = None,
@@ -161,6 +201,7 @@ def coilset_to_freegsnke_tokamak(
 
     active_coils_data: dict[str, Any] = {}
     coil_currents: dict[str, float] = {}
+    elem_map: dict[str, Any] = {}
 
     for idx, element in enumerate(coilset._coils):
         if isinstance(element, (Circuit, SymmetricCircuit)):
@@ -169,6 +210,7 @@ def coilset_to_freegsnke_tokamak(
                 if isinstance(getattr(element, "name", None), str)
                 else f"circuit_{idx}"
             )
+            elem_map[elem_name] = element
             circuit_dict: dict[str, Any] = {}
             for sub_idx, subcoil in enumerate(element._coils):
                 sub_name = (
@@ -189,6 +231,7 @@ def coilset_to_freegsnke_tokamak(
             coil_currents[elem_name] = float(np.asarray(element.current).flat[0])
         elif isinstance(element, Coil):
             elem_name = element.name or f"coil_{idx}"
+            elem_map[elem_name] = element
             active_coils_data[elem_name] = {
                 "R": [float(element.x)],
                 "Z": [float(element.z)],
@@ -244,13 +287,9 @@ def coilset_to_freegsnke_tokamak(
         if control_names is None:
             coil_elem.control = True
         else:
-            is_ctrl = label in control_names
-            if not is_ctrl and hasattr(coil_elem, "coils"):
-                is_ctrl = any(
-                    getattr(sc, "name", "") in control_names
-                    for sc in getattr(coil_elem, "coils", [])
-                )
-            coil_elem.control = is_ctrl
+            coil_elem.control = _is_coil_element_controllable(
+                label, coil_elem, control_names, elem_map
+            )
 
     return tokamak
 
@@ -909,7 +948,7 @@ def run_inverse_solve(
     max_iter_per_update: int = 5,
     picard_handover: float = 0.15,
     order: int = 2,
-    force_up_down_symmetric: bool | None = None,
+    force_up_down_symmetric: bool = False,
     callback: Callable[[int, Any, float], None] | None = None,
     weight_isoflux: float = 1.0,
     weight_nulls: float = 1.0,
@@ -1009,20 +1048,24 @@ def run_inverse_solve(
         ny=int(eq.grid.nz),
     )
 
-    if getattr(eq, "_psi", None) is not None:
-        freegsnke_eq.plasma_psi = np.asarray(eq._psi, dtype=np.float64)
-    elif getattr(eq, "psi", None) is not None:
-        psi_val = eq.psi() if callable(eq.psi) else eq.psi
-        if psi_val is not None:
-            freegsnke_eq.plasma_psi = np.asarray(psi_val, dtype=np.float64)
+    if (
+        hasattr(eq, "plasma")
+        and eq.plasma is not None
+        and hasattr(eq.plasma, "psi")
+        and getattr(eq.plasma, "_j_tor", None) is not None
+    ):
+        try:
+            current_psi = eq.plasma.psi()
+            if current_psi is not None and np.any(np.abs(current_psi) > _PSI_TOL):
+                freegsnke_eq.plasma_psi = np.asarray(
+                    current_psi, dtype=np.float64
+                ).copy()
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     freegsnke_profiles = profile_to_freegsnke(eq.profiles, freegsnke_eq)
 
-    symmetric = (
-        bool(getattr(eq, "force_symmetry", False))
-        if force_up_down_symmetric is None
-        else bool(force_up_down_symmetric)
-    )
+    symmetric = bool(force_up_down_symmetric)
 
     solver = NKGSsolver(freegsnke_eq, gs_operator_order=order)
 
@@ -1043,14 +1086,10 @@ def run_inverse_solve(
     )
     time_taken = time.perf_counter() - t0
 
-    update_bluemira_from_freegsnke(eq, freegsnke_eq, freegsnke_profiles)
-
     optimized_currents: dict[str, float] = {}
     for label, coil_elem in freegsnke_eq.tokamak.coils:
         curr = float(getattr(coil_elem, "current", 0.0))
         optimized_currents[label] = curr
-        if label in eq.coilset:
-            eq.coilset[label].current = curr
 
     if hasattr(eq, "coilset") and eq.coilset is not None:
         for idx, element in enumerate(eq.coilset._coils):
@@ -1066,9 +1105,15 @@ def run_inverse_solve(
             elif f"circuit_{idx}" in optimized_currents:
                 element.current = optimized_currents[f"circuit_{idx}"]
 
+    update_bluemira_from_freegsnke(eq, freegsnke_eq, freegsnke_profiles)
+
     rel_error = getattr(solver, "relative_change", float("nan"))
-    norm_rel = getattr(solver, "norm_rel_change", [])
-    iterations = max(0, len(norm_rel) - 1) if norm_rel else 0
+    constrain_loss = getattr(solver, "constrain_loss", [])
+    if constrain_loss:
+        iterations = len(constrain_loss)
+    else:
+        norm_rel = getattr(solver, "norm_rel_change", [])
+        iterations = max(0, len(norm_rel) - 1) if norm_rel else 0
     converged = bool(rel_error <= target_relative_tolerance)
 
     psi_ax_val = float(eq.psi_ax) if eq.psi_ax is not None else float("nan")
@@ -1108,7 +1153,7 @@ class InverseGSSolver:
     order:
         Finite-difference operator order (2 or 4). Default is 2.
     force_up_down_symmetric:
-        Whether to enforce up-down symmetry.
+        Whether to enforce up-down symmetry. Default is False.
     picard_handover:
         Threshold to switch from Picard to Newton-Krylov.
     callback:
@@ -1141,7 +1186,7 @@ class InverseGSSolver:
         max_iterations: int = 100,
         max_iter_per_update: int = 5,
         order: int = 2,
-        force_up_down_symmetric: bool | None = None,
+        force_up_down_symmetric: bool = False,
         picard_handover: float = 0.15,
         callback: Callable[[int, Any, float], None] | None = None,
         weight_isoflux: float = 1.0,
