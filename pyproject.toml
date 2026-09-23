@@ -50,6 +50,9 @@ dependencies = [
     "scipy>=1.16.0",
 ]
 
+[project.scripts]
+bluemira = "bluemira.cli:cli"
+
 [project.urls]
 homepage = "https://github.com/Fusion-Power-Plant-Framework/bluemira"
 documentation = "https://bluemira.readthedocs.io"

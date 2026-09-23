@@ -139,6 +139,89 @@ class ParameterFrame:
         for field in fields(self):
             yield getattr(self, field.name)
 
+    def __getitem__(self, key: str) -> Parameter:
+        """
+        Get a Parameter from this frame by name.
+
+        Parameters
+        ----------
+        key:
+            The parameter name.
+
+        Returns
+        -------
+        :
+            The requested Parameter.
+
+        Raises
+        ------
+        KeyError
+            If key is not a Parameter in this frame.
+        """
+        if hasattr(self, key):
+            val = getattr(self, key)
+            if isinstance(val, Parameter):
+                return val
+        raise KeyError(f"Parameter '{key}' not found in {type(self).__name__}")
+
+    def __contains__(self, key: str) -> bool:
+        """
+        Check if a parameter with the given name exists in this frame.
+
+        Parameters
+        ----------
+        key:
+            The parameter name.
+
+        Returns
+        -------
+        :
+            True if the parameter exists in this frame, False otherwise.
+        """
+        return hasattr(self, key) and isinstance(getattr(self, key), Parameter)
+
+    def get(self, key: str, default: Any = None) -> Parameter | Any:
+        """
+        Get a Parameter from this frame by name with a default fallback.
+
+        Parameters
+        ----------
+        key:
+            The parameter name.
+        default:
+            Fallback default value if key is not found.
+
+        Returns
+        -------
+        :
+            The Parameter or default value.
+        """
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def get_param_schema(self) -> list[dict[str, Any]]:
+        """
+        Get schema descriptors for all parameters in this frame.
+
+        Returns
+        -------
+        :
+            List of dictionaries containing parameter metadata.
+        """
+        return [
+            {
+                "name": p.name,
+                "value": p.value,
+                "unit": str(p.unit),
+                "source": p.source,
+                "long_name": p.long_name,
+                "description": p.description,
+            }
+            for p in self
+        ]
+
     def update(
         self, new_values: dict[str, ParameterValueType] | ParamDictT | ParameterFrame
     ):
@@ -695,11 +778,12 @@ def tabulate_values_from_multiple_frames(
     multiple value columns
     """
     names = iter(value_labels)
-    columns, records = frames[0].tabulation_data(
+    frames_list = list(frames)
+    columns, records = frames_list[0].tabulation_data(
         ["Parameter", "value"], floatfmt=floatfmt, value_label=next(names)
     )
-    for frame in frames[1:]:
-        if not isinstance(frame, type(frames[0])):
+    for frame in frames_list[1:]:
+        if not isinstance(frame, type(frames_list[0])):
             raise TypeError("All ParameterFrames must be of the same type")
         column, record = frame.tabulation_data(
             ["value"], floatfmt=floatfmt, value_label=next(names)

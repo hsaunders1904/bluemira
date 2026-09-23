@@ -7,18 +7,20 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import pprint
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from bluemira.base.error import ReactorConfigError
+from bluemira.base.constants import ureg
+from bluemira.base.error import ParameterError, ReactorConfigError
 from bluemira.base.look_and_feel import bluemira_debug, bluemira_warn
-from bluemira.base.parameter_frame import make_parameter_frame
+from bluemira.base.parameter_frame import EmptyFrame, make_parameter_frame
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
     from bluemira.base.parameter_frame._parameter import ParamDictT
     from bluemira.base.parameter_frame.typed import ParameterFrameT
@@ -35,6 +37,9 @@ class ConfigParams:
 _PARAMETERS_KEY = "params"
 _FILEPATH_PREFIX = "$path:"
 _FILEPATH_EXPANSION_PREFIX = "$path_expand:"
+_GLOBAL_PARAM_DEPTH = 2
+_MIN_SUBCOMP_DEPTH = 2
+_DEFAULT_JSON_INDENT = 2
 
 
 class ReactorConfig:
@@ -43,14 +48,14 @@ class ReactorConfig:
     handles overwriting multiply defined attributes.
 
     If an attribute is defined more than once in a component,
-    the more globally scoped value is used (global overwrites local).
+    it will be overwritten in order of inheritance.
 
     Parameters
     ----------
     config_path:
-        The path to the config JSON file or a dict of the data.
+        Path to the config file, or dictionary with the configuration data.
     global_params_type:
-        The ParameterFrame type for the global params.
+        The type of the global parameters.
     warn_on_duplicate_keys:
         Print a warning when duplicate keys are found,
         whose value will be overwritten.
@@ -123,11 +128,27 @@ class ReactorConfig:
             self._expand_paths_in_dict(config_data, Path(config_path).parent)
 
         self.config_data = config_data
+        has_explicit_params = _PARAMETERS_KEY in self.config_data
+        if has_explicit_params:
+            global_dict = self.config_data.get(_PARAMETERS_KEY, {})
+            allow_unknown = False
+        else:
+            global_dict = {
+                k: v
+                for k, v in self.config_data.items()
+                if isinstance(v, dict) and "value" in v
+            }
+            allow_unknown = (
+                issubclass(global_params_type, EmptyFrame)
+                if isinstance(global_params_type, type)
+                else False
+            )
+
         self.global_params = make_parameter_frame(
-            self.config_data.get(_PARAMETERS_KEY, {}), global_params_type
+            global_dict, global_params_type, allow_unknown=allow_unknown
         )
 
-        if not self.global_params:
+        if not self.global_params and not global_dict:
             bluemira_warn("Empty global params")
 
     def __str__(self) -> str:
@@ -154,30 +175,17 @@ class ReactorConfig:
         These are all the values defined by a "params"
         key in the config file.
 
-        This will merge all multiply defined params,
-        with global overwriting local.
-
         Parameters
         ----------
         component_name:
-            The component name, must match a key in the config
-        *args:
-            Optionally, specify the keys of nested attributes.
-
-            This will hoist the values defined in the nested attributes
-            to the top level of the `local_params` dict
-            in the returned `ConfigParams` object.
-
-            The args must be in the order that they appear in the config.
+            The name of the component to get the params for
+        args:
+            The subcomponents to get the params for
 
         Returns
         -------
-        Holds the global_params (from `self.global_params`)
-        and the extracted local_params.
-
-        Use the
-        :func:`bluemira.base.parameter_frame._frame.make_parameter_frame`
-        helper function to convert it into a typed ParameterFrame.
+        :
+            A tuple of the global params and the local params
         """
         args = (component_name, *args)
         self._check_args_are_strings(args)
@@ -185,48 +193,449 @@ class ReactorConfig:
         local_params = self._extract(args, is_config=False)
         if not local_params:
             self._warn_or_debug_log(
-                f"Empty local params for args: {args}",
+                f"local params for {' '.join(args)} is empty",
                 warn=self.warn_on_empty_local_params,
             )
 
-        return ConfigParams(global_params=self.global_params, local_params=local_params)
+        return ConfigParams(self.global_params, local_params)
 
     def config_for(self, component_name: str, *args: str) -> dict:
         """
         Gets the config for the `component_name` from the config file.
 
-        These are all the values other than
-        those defined by a "params" key in the config file.
-
-        This will merge all multiply defined values,
-        with global overwriting local.
+        These are all the values not defined by a "params"
+        key in the config file.
 
         Parameters
         ----------
         component_name:
-            The component name, must match a key in the config
-        *args:
-            Optionally, specify the keys of nested attributes.
-
-            This will hoist the values defined in the nested attributes
-            to the top level of the returned dict.
-
-            The args must be in the order that they appear in the config.
+            The name of the component to get the config for
+        args:
+            The subcomponents to get the config for
 
         Returns
         -------
-        The extracted config.
+        :
+            A dict of the config values
         """
         args = (component_name, *args)
         self._check_args_are_strings(args)
 
-        _return = self._extract(args, is_config=True)
-        if not _return:
+        config = self._extract(args)
+        if not config:
             self._warn_or_debug_log(
-                f"Empty config for args: {args}", warn=self.warn_on_empty_config
+                f"config for {' '.join(args)} is empty",
+                warn=self.warn_on_empty_config,
             )
+        return config
 
-        return _return
+    @property
+    def components(self) -> dict:
+        """
+        The components of the config file.
+
+        These are all the top level keys in the config file
+        excluding the "params" key.
+
+        Returns
+        -------
+        :
+            A dict of the components
+        """
+        return {k: v for k, v in self.config_data.items() if k != _PARAMETERS_KEY}
+
+    @property
+    def component_names(self) -> list[str]:
+        """
+        The names of the components in the config file.
+
+        These are all the top level keys in the config file
+        excluding the "params" key.
+
+        Returns
+        -------
+        :
+            A list of the component names
+        """
+        return list(self.components.keys())
+
+    # -------------------------------------------------------------------------
+    # Dot-path Parameter Access, Inspection & Persistence
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_param_path(path: str | Sequence[str]) -> tuple[str, ...]:
+        """
+        Normalize a parameter path string or sequence into a tuple of segments.
+
+        Parameters
+        ----------
+        path:
+            A dot-separated string (e.g. 'Plasma.designer.R_0') or a sequence of
+            strings (e.g. ['Plasma', 'designer', 'R_0']).
+
+        Returns
+        -------
+        :
+            Tuple of path segment strings.
+
+        Raises
+        ------
+        ParameterError
+            If path is empty, contains empty segments, or sequence elements contain
+            full stops.
+        """
+        if isinstance(path, str):
+            parts = tuple(part.strip() for part in path.split("."))
+        else:
+            parts = tuple(str(part).strip() for part in path)
+            for part in parts:
+                if "." in part:
+                    msg = f"Parameter path segment '{part}' must not contain full stops."
+                    raise ParameterError(msg)
+
+        if not parts or any(not p for p in parts):
+            msg = f"Invalid parameter path: {path!r}. Path cannot be empty."
+            raise ParameterError(msg)
+        return parts
+
+    def _resolve_param_target(
+        self, path: str | Sequence[str]
+    ) -> tuple[dict[str, Any], str, tuple[str, ...]]:
+        """
+        Locate the dictionary container and key for a parameter path.
+
+        Handles both direct paths (e.g. 'Plasma.designer.params.R_0') and
+        concise paths omitting '.params.' (e.g. 'Plasma.designer.R_0'),
+        single global parameter names, and top-level flat parameter keys.
+
+        Returns
+        -------
+        :
+            Tuple of (container_dict, leaf_key, canonical_path_tuple).
+
+        Raises
+        ------
+        ReactorConfigError
+            If parameter is not found.
+        """
+        parts = self._normalize_param_path(path)
+
+        # 1. Direct path traversal
+        container: Any = self.config_data
+        direct_match = True
+        for part in parts[:-1]:
+            if isinstance(container, dict) and part in container:
+                container = container[part]
+            else:
+                direct_match = False
+                break
+
+        if direct_match and isinstance(container, dict) and parts[-1] in container:
+            val = container[parts[-1]]
+            if isinstance(val, dict) and "value" in val:
+                return container, parts[-1], parts
+
+        # 2. Path omitting ".params." before the parameter name
+        # e.g. ("Plasma", "designer", "R_0") -> check Plasma.designer.params.R_0
+        if len(parts) >= _GLOBAL_PARAM_DEPTH and parts[-2] != _PARAMETERS_KEY:
+            container = self.config_data
+            params_match = True
+            for part in parts[:-1]:
+                if isinstance(container, dict) and part in container:
+                    container = container[part]
+                else:
+                    params_match = False
+                    break
+            if (
+                params_match
+                and isinstance(container, dict)
+                and _PARAMETERS_KEY in container
+                and isinstance(container[_PARAMETERS_KEY], dict)
+                and parts[-1] in container[_PARAMETERS_KEY]
+            ):
+                params_dict = container[_PARAMETERS_KEY]
+                val = params_dict[parts[-1]]
+                if isinstance(val, dict) and "value" in val:
+                    canonical_path = (*parts[:-1], _PARAMETERS_KEY, parts[-1])
+                    return params_dict, parts[-1], canonical_path
+
+        # 3. Single parameter name referring to global params or top-level params
+        if len(parts) == 1:
+            global_params = self.config_data.get(_PARAMETERS_KEY, {})
+            if isinstance(global_params, dict) and parts[0] in global_params:
+                val = global_params[parts[0]]
+                if isinstance(val, dict) and "value" in val:
+                    return global_params, parts[0], (_PARAMETERS_KEY, parts[0])
+            if parts[0] in self.config_data:
+                val = self.config_data[parts[0]]
+                if isinstance(val, dict) and "value" in val:
+                    return self.config_data, parts[0], (parts[0],)
+
+        # 4. Two-part path with 'params.<name>' when parameters are at top-level
+        if (
+            len(parts) == _GLOBAL_PARAM_DEPTH
+            and parts[0] == _PARAMETERS_KEY
+            and parts[1] in self.config_data
+        ):
+            val = self.config_data[parts[1]]
+            if isinstance(val, dict) and "value" in val:
+                return self.config_data, parts[1], (parts[1],)
+
+        raise ReactorConfigError(
+            f"Parameter '{'.'.join(parts)}' not found in configuration."
+        )
+
+    def get_param(self, path: str | Sequence[str]) -> dict[str, Any]:
+        """
+        Get the parameter dictionary for a given dot-path or path sequence.
+
+        Parameters
+        ----------
+        path:
+            The parameter path, e.g. 'Plasma.designer.R_0' or 'params.height'.
+
+        Returns
+        -------
+        :
+            The parameter dictionary (contains 'value', 'unit', etc.).
+        """
+        container, key, _ = self._resolve_param_target(path)
+        return container[key]
+
+    def get_param_value(self, path: str | Sequence[str]) -> Any:
+        """
+        Get the value of a parameter for a given dot-path or path sequence.
+
+        Parameters
+        ----------
+        path:
+            The parameter path, e.g. 'Plasma.designer.R_0' or 'params.height'.
+
+        Returns
+        -------
+        :
+            The parameter value.
+        """
+        return self.get_param(path).get("value")
+
+    def set_param(
+        self,
+        path: str | Sequence[str],
+        value: Any,
+        *,
+        unit: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        """
+        Set the value and optionally unit/source of a parameter.
+
+        Updates both `config_data` and any corresponding `global_params`
+        in-place.
+
+        Parameters
+        ----------
+        path:
+            The parameter path, e.g. 'Plasma.designer.R_0' or 'params.height'.
+        value:
+            The new value for the parameter.
+        unit:
+            Optionally update the unit.
+        source:
+            Optionally update the source.
+        """
+        container, key, canonical_path = self._resolve_param_target(path)
+        container[key]["value"] = value
+        if unit is not None:
+            container[key]["unit"] = unit
+        if source is not None:
+            container[key]["source"] = source
+
+        # If this is a global parameter, keep self.global_params synchronized
+        if (
+            (
+                canonical_path[0] == _PARAMETERS_KEY
+                and len(canonical_path) == _GLOBAL_PARAM_DEPTH
+            )
+            or len(canonical_path) == 1
+        ) and hasattr(self.global_params, key):
+            global_param = getattr(self.global_params, key)
+            if unit is not None:
+                global_param._unit = ureg.Unit(unit)
+            global_param.set_value(value, source or "ReactorConfig.set_param")
+
+    def __getitem__(self, path: str | Sequence[str]) -> dict[str, Any]:
+        """
+        Get parameter dict via bracket notation.
+
+        Parameters
+        ----------
+        path:
+            Parameter dot-path, e.g. 'Plasma.designer.R_0'.
+
+        Returns
+        -------
+        :
+            The parameter dictionary.
+        """
+        return self.get_param(path)
+
+    def __setitem__(self, path: str | Sequence[str], value: Any) -> None:
+        """
+        Set parameter value via bracket notation.
+
+        Parameters
+        ----------
+        path:
+            Parameter dot-path, e.g. 'Plasma.designer.R_0'.
+        value:
+            The new parameter value.
+        """
+        self.set_param(path, value)
+
+    def __contains__(self, path: str | Sequence[str]) -> bool:
+        """
+        Check if parameter exists at path.
+
+        Parameters
+        ----------
+        path:
+            The parameter dot-path or path sequence.
+
+        Returns
+        -------
+        :
+            True if parameter exists, False otherwise.
+        """
+        try:
+            self._resolve_param_target(path)
+        except (ReactorConfigError, ParameterError):
+            return False
+        else:
+            return True
+
+    def _walk_params(
+        self,
+        data: dict[str, Any],
+        current_path: tuple[str, ...],
+    ) -> list[tuple[tuple[str, ...], tuple[str, ...], str, dict[str, Any]]]:
+        """
+        Recursively walk config data to collect all parameters.
+
+        Returns
+        -------
+        :
+            List of tuples (short_path, canonical_path, param_name, param_dict).
+        """
+        results = []
+        for k, v in data.items():
+            if k == _PARAMETERS_KEY and isinstance(v, dict):
+                for p_name, p_data in v.items():
+                    if isinstance(p_data, dict) and "value" in p_data:
+                        canonical = (*current_path, _PARAMETERS_KEY, p_name)
+                        short = (
+                            (*current_path, p_name)
+                            if current_path
+                            else (_PARAMETERS_KEY, p_name)
+                        )
+                        results.append((short, canonical, p_name, p_data))
+            elif isinstance(v, dict) and "value" in v:
+                canonical = (*current_path, k)
+                short = (*current_path, k)
+                results.append((short, canonical, k, v))
+            elif isinstance(v, dict):
+                results.extend(self._walk_params(v, (*current_path, k)))
+        return results
+
+    def list_params(self, *, canonical: bool = False) -> dict[str, dict[str, Any]]:
+        """
+        Return a dictionary of all parameters mapped by their dot-paths.
+
+        Parameters
+        ----------
+        canonical:
+            If True, use canonical paths containing '.params.',
+            otherwise use concise paths.
+
+        Returns
+        -------
+        :
+            Dict mapping dot-path to parameter dictionary.
+        """
+        entries = self._walk_params(self.config_data, ())
+        res = {}
+        for short_path, canonical_path, _, param_dict in entries:
+            key = ".".join(canonical_path if canonical else short_path)
+            res[key] = copy.deepcopy(param_dict)
+        return res
+
+    def get_param_schema(self) -> list[dict[str, Any]]:
+        """
+        Return schema metadata for all parameters in the configuration.
+
+        Useful for GUI generation, CLI inspection, and scan setups.
+
+        Returns
+        -------
+        :
+            List of parameter metadata dictionaries.
+        """
+        entries = self._walk_params(self.config_data, ())
+        schema = []
+        for short_path, canonical_path, p_name, p_data in entries:
+            component = (
+                "global"
+                if len(short_path) <= 1 or short_path[0] == _PARAMETERS_KEY
+                else short_path[0]
+            )
+            subcomponent = (
+                ".".join(short_path[1:-1])
+                if len(short_path) > _MIN_SUBCOMP_DEPTH and component != "global"
+                else ""
+            )
+            schema.append({
+                "name": p_name,
+                "path": ".".join(short_path),
+                "canonical_path": ".".join(canonical_path),
+                "component": component,
+                "subcomponent": subcomponent,
+                "value": p_data.get("value"),
+                "unit": p_data.get("unit", ""),
+                "source": p_data.get("source", ""),
+                "long_name": p_data.get("long_name", ""),
+                "description": p_data.get("description", "")
+                or p_data.get("long_name", ""),
+            })
+        return schema
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Return a deep copy of the configuration dictionary.
+
+        Returns
+        -------
+        :
+            A deep copy of config_data.
+        """
+        return copy.deepcopy(self.config_data)
+
+    def save(self, path: str | Path, *, indent: int = _DEFAULT_JSON_INDENT) -> None:
+        """
+        Save the configuration data to a JSON file.
+
+        Parameters
+        ----------
+        path:
+            Target file path.
+        indent:
+            JSON indentation level.
+        """
+        with open(path, "w") as f:
+            json.dump(self.config_data, f, indent=indent)
+
+    # -------------------------------------------------------------------------
+    # Internal Loading and Extraction Routines
+    # -------------------------------------------------------------------------
 
     @staticmethod
     def _read_or_return(config_path: str | Path | dict) -> dict:
@@ -383,6 +792,5 @@ class ReactorConfig:
         path_value = (
             config_dir / path_str if not path_str.startswith("/") else Path(path_str)
         )
-        path_value = path_value.resolve()
 
-        return path_value.as_posix()
+        return str(path_value.resolve())

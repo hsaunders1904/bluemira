@@ -4,13 +4,14 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from bluemira.base.constants import EPS, raw_uc
-from bluemira.base.error import ReactorConfigError
+from bluemira.base.error import ParameterError, ReactorConfigError
 from bluemira.base.logs import get_log_level, set_log_level
 from bluemira.base.parameter_frame import (
     EmptyFrame,
@@ -239,3 +240,141 @@ class TestReactorConfigClass:
             reactor_config.config_for("comp A")["test_expand_file"]
             == (Path(test_config_path.parent) / "nest_a/nest_a.config.json").as_posix()
         )
+
+    def test_param_dot_path_access(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        p = reactor_config.get_param("comp A.designer.age")
+        assert p["value"] == 3
+        assert p["unit"] == "years"
+
+        # Canonical path with .params. also works
+        p_canon = reactor_config.get_param("comp A.designer.params.age")
+        assert p_canon["value"] == 3
+
+        # Global param
+        p_global = reactor_config.get_param("params.height")
+        assert p_global["value"] == 180
+        assert p_global["unit"] == "cm"
+
+        # Short global param name
+        assert reactor_config.get_param("height")["value"] == 180
+
+        # get_param_value
+        assert reactor_config.get_param_value("comp A.designer.age") == 3
+        assert reactor_config.get_param_value("height") == 180
+
+    def test_param_dot_path_set(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        reactor_config.set_param("comp A.designer.age", 15)
+        assert reactor_config.get_param_value("comp A.designer.age") == 15
+
+        # Updating global parameter updates both config_data and global_params frame
+        reactor_config.set_param("params.height", 2.2, unit="m")
+        assert reactor_config.get_param_value("height") == pytest.approx(
+            2.2, rel=0, abs=EPS
+        )
+        assert reactor_config.global_params.height.value == pytest.approx(
+            2.2, rel=0, abs=EPS
+        )
+
+    def test_param_bracket_and_contains(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        assert "comp A.designer.age" in reactor_config
+        assert "comp A.designer.dne" not in reactor_config
+        assert reactor_config["comp A.designer.age"]["value"] == 3
+
+        reactor_config["comp A.designer.age"] = 25
+        assert reactor_config["comp A.designer.age"]["value"] == 25
+
+    def test_dot_in_param_path_segment_error(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        with pytest.raises(ParameterError, match="must not contain full stops"):
+            reactor_config.get_param(["comp A", "designer.age"])
+
+    def test_param_not_found_raises_reactor_config_error(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        with pytest.raises(ReactorConfigError, match="not found in configuration"):
+            reactor_config.get_param("nonexistent.component.param")
+
+    def test_list_params(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        params = reactor_config.list_params()
+        assert "params.height" in params
+        assert "comp A.name" in params
+        assert "comp A.designer.age" in params
+
+        canonical = reactor_config.list_params(canonical=True)
+        assert "params.height" in canonical
+        assert "comp A.params.name" in canonical
+        assert "comp A.designer.params.age" in canonical
+
+    def test_get_param_schema(self):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        schema = reactor_config.get_param_schema()
+        assert len(schema) > 0
+        names = [item["name"] for item in schema]
+        assert "height" in names
+        assert "age" in names
+        des_age = next(item for item in schema if item["path"] == "comp A.designer.age")
+        assert des_age["component"] == "comp A"
+        assert des_age["subcomponent"] == "designer"
+        assert des_age["value"] == 3
+
+    def test_to_dict_and_save(self, tmp_path):
+        reactor_config = ReactorConfig(test_config_path, TestGlobalParams)
+        data_copy = reactor_config.to_dict()
+        assert isinstance(data_copy, dict)
+        assert data_copy == reactor_config.config_data
+        assert data_copy is not reactor_config.config_data
+
+        save_path = tmp_path / "saved_config.json"
+        reactor_config.save(save_path)
+        assert save_path.exists()
+        reloaded = ReactorConfig(save_path, TestGlobalParams)
+        assert reloaded.get_param_value("comp A.designer.age") == 3
+
+    def test_flat_parameter_dictionary_and_empty_frame(self, tmp_path):
+        flat_dict = {
+            "A": {
+                "value": 2.7,
+                "unit": "dimensionless",
+                "source": "Input",
+                "long_name": "Plasma aspect ratio",
+            },
+            "B_0": {
+                "value": 6.0,
+                "unit": "tesla",
+                "source": "Input",
+                "long_name": "Toroidal field at R_0",
+            },
+            "R_0": {
+                "value": 9.0,
+                "unit": "meter",
+                "source": "Input",
+                "long_name": "Major radius",
+            },
+        }
+        json_file = tmp_path / "flat_params.json"
+        with open(json_file, "w") as f:
+            json.dump(flat_dict, f)
+
+        cfg = ReactorConfig(json_file, EmptyFrame)
+        params = cfg.list_params()
+        assert len(params) == 3
+        assert "A" in params
+        assert "B_0" in params
+        assert "R_0" in params
+
+        assert cfg.get_param_value("A") == pytest.approx(2.7)
+        assert cfg.get_param_value("params.A") == pytest.approx(2.7)
+        assert cfg.get_param_value("R_0") == pytest.approx(9.0)
+
+        schema = cfg.get_param_schema()
+        assert len(schema) == 3
+        a_schema = next(s for s in schema if s["name"] == "A")
+        assert a_schema["description"] == "Plasma aspect ratio"
+        assert a_schema["component"] == "global"
+
+        cfg.set_param("A", 3.1)
+        assert cfg.get_param_value("A") == pytest.approx(3.1)
+        assert cfg.config_data["A"]["value"] == pytest.approx(3.1)

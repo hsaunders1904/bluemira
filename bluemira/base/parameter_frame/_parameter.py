@@ -14,6 +14,7 @@ import pint
 from typeguard import config, typechecked
 
 from bluemira.base.constants import raw_uc, units_compatible, ureg
+from bluemira.base.error import ParameterError
 
 
 def type_fail(exc, memo):  # noqa: ARG001
@@ -87,6 +88,10 @@ class Parameter(Generic[ParameterValueType]):
         long_name: str = "",
         _value_types: tuple[type, ...] | None = None,
     ):
+        if "." in name:
+            raise ParameterError(
+                f"Parameter name '{name}' must not contain full stops ('.')."
+            )
         value = self._type_check(name, value, _value_types)
         self._name = name
         self._value = value

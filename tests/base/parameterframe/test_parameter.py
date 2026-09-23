@@ -10,6 +10,7 @@ from typing import ClassVar
 import pytest
 
 from bluemira.base.constants import EPS
+from bluemira.base.error import ParameterError
 from bluemira.base.parameter_frame import Parameter
 
 
@@ -77,6 +78,10 @@ class TestParameter:
 
         with pytest.raises(TypeError):
             Parameter(**kwargs)
+
+    def test_parameter_name_with_full_stop_raises_parameter_error(self):
+        with pytest.raises(ParameterError, match="must not contain full stops"):
+            Parameter(name="plasma.R_0", value=9.0)
 
     def test_to_dict_returns_equal_dict_as_used_in_init(self):
         param = Parameter(**self.SERIALIZED_PARAM)
@@ -147,6 +152,10 @@ class TestParameter:
             ),
             (
                 {"name": "p", "value": 1, "unit": "m"},
+                {"name": "p", "value": 100, "unit": "cm"},
+            ),
+            (
+                {"name": "p", "value": 100, "unit": "cm"},
                 {"name": "p", "value": 100, "unit": "cm"},
             ),
         ],

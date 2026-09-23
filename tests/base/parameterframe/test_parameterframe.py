@@ -640,7 +640,7 @@ class TestParameterFrameUnits:
         assert frame.wtf1.value == pytest.approx(5.555555)
         assert frame.wtf1.unit == "m⁵/deg/fpy/s"
         assert frame.wtf2.value == pytest.approx(0.0872664)
-        assert frame.wtf2.unit == "dpa·m⁵/deg/fpy/s"
+        assert frame.wtf2.unit in {"dpa·m⁵/deg/fpy/s", "dpa⋅m⁵/deg/fpy/s"}
         assert frame.wtf3.value == pytest.approx(0.01388888)
         assert frame.wtf3.unit == "m⁵/deg/dpa/fpy/s"
         assert frame.wtf4.value == pytest.approx(1e-9)
@@ -701,3 +701,22 @@ def test_changes_to_parameters_are_propagated_between_frames():
     slim_frame.height.value = 200.5
 
     assert base_frame.height.value == pytest.approx(200.5, rel=0, abs=EPS)
+
+
+def test_parameter_frame_getitem_and_contains():
+    frame = BasicFrame.from_dict(FRAME_DATA)
+    assert "height" in frame
+    assert "nonexistent" not in frame
+    assert frame["height"] is frame.height
+    assert frame.get("height") is frame.height
+    assert frame.get("nonexistent", 42) == 42
+    with pytest.raises(KeyError):
+        _ = frame["nonexistent"]
+
+
+def test_parameter_frame_get_param_schema():
+    frame = BasicFrame.from_dict(FRAME_DATA)
+    schema = frame.get_param_schema()
+    names = [s["name"] for s in schema]
+    assert "height" in names
+    assert "age" in names

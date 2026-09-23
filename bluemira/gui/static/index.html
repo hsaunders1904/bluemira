@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bluemira Studio — Interactive Reactor Designer</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-icon">⚛</div>
+        <div class="brand-text">
+          <h1>BLUEMIRA</h1>
+          <span class="subtitle">Reactor Parameter Twiddler & 3D Studio</span>
+        </div>
+      </div>
+      <div class="header-controls">
+        <div class="status-badge" id="diffBadge">
+          <span class="badge-dot"></span>
+          <span id="diffCountText">0 modified</span>
+        </div>
+        <button class="btn btn-secondary" id="btnOpenScan" title="Open Parameter Sweep Studio">
+          ⚡ Sweep Studio
+        </button>
+        <button class="btn btn-secondary" id="btnResetAll" title="Reset all parameters to baseline">
+          ↺ Reset All
+        </button>
+        <button class="btn btn-secondary" id="btnToggleDiff" title="View changed parameters">
+          ⇄ Diff View
+        </button>
+        <a class="btn btn-primary" href="/api/export" download="bluemira_config.json" id="btnExport">
+          ↓ Export JSON
+        </a>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+      <!-- Left Sidebar: Component Navigation -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h3>Components</h3>
+        </div>
+        <ul class="nav-list" id="componentNav">
+          <li class="nav-item active" data-component="all">
+            <span class="nav-icon">▤</span> All Parameters
+          </li>
+        </ul>
+        <div class="sidebar-footer">
+          <span class="version-tag">Bluemira Interactive v2.15</span>
+        </div>
+      </aside>
+
+      <!-- Center: Parameter Twiddler Cards -->
+      <section class="twiddler-section">
+        <div class="section-toolbar">
+          <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Search parameters (e.g. r_0, thickness)...">
+            <button id="clearSearch" class="btn-icon">✕</button>
+          </div>
+          <div class="toolbar-stats" id="paramCountDisplay">
+            Loading parameters...
+          </div>
+        </div>
+
+        <div class="cards-grid" id="paramsGrid">
+          <!-- Parameter cards injected dynamically via app.js -->
+        </div>
+      </section>
+
+      <!-- Right: Viewport Panel (2D & 3D tabs) -->
+      <aside class="preview-panel">
+        <div class="viewport-tabs">
+          <button class="tab-btn active" id="tab2D">2D Poloidal View</button>
+          <button class="tab-btn" id="tab3D">3D CAD Viewport</button>
+        </div>
+
+        <!-- 2D View Container -->
+        <div class="view-container active" id="container2D">
+          <div class="preview-header">
+            <h3>2D Poloidal Cross-Section</h3>
+            <span class="live-pill">● LIVE</span>
+          </div>
+          <div class="canvas-container">
+            <canvas id="poloidalCanvas" width="480" height="520"></canvas>
+            <div class="canvas-overlay" id="coordsOverlay">R: 0.00 m | Z: 0.00 m</div>
+          </div>
+          <div class="preview-legend">
+            <div class="legend-item"><span class="legend-color plasma-color"></span> Plasma</div>
+            <div class="legend-item"><span class="legend-color blanket-color"></span> Blanket</div>
+            <div class="legend-item"><span class="legend-color vv-color"></span> Vacuum Vessel</div>
+          </div>
+        </div>
+
+        <!-- 3D View Container -->
+        <div class="view-container" id="container3D">
+          <div class="preview-header">
+            <h3>3D Tokamak CAD View</h3>
+            <a class="btn-sm btn-secondary" href="/api/cad/export?format=obj" download="reactor_model.obj" id="btnExportCad">
+              ↓ OBJ
+            </a>
+          </div>
+          <div class="canvas-container">
+            <canvas id="cad3dCanvas" width="480" height="460"></canvas>
+            <div class="cad-overlay" id="cadOverlay">Click & drag to orbit | Scroll to zoom</div>
+          </div>
+          <!-- 3D Controls -->
+          <div class="cad-controls">
+            <div class="control-row">
+              <label for="cutawaySlider">Section Cutaway:</label>
+              <input type="range" id="cutawaySlider" min="0" max="180" step="5" value="90">
+              <span id="cutawayVal">90°</span>
+            </div>
+            <div class="visibility-toggles">
+              <label><input type="checkbox" id="togglePlasma" checked> Plasma</label>
+              <label><input type="checkbox" id="toggleBlanket" checked> Blanket</label>
+              <label><input type="checkbox" id="toggleVV" checked> Vessel</label>
+              <label><input type="checkbox" id="toggleTF" checked> TF Coils</label>
+              <label><input type="checkbox" id="toggleWireframe"> Wireframe</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metric Cards -->
+        <div class="metrics-panel">
+          <div class="metric-card">
+            <span class="metric-label">Aspect Ratio (A)</span>
+            <span class="metric-val" id="metricAspect">-</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Elongation (κ)</span>
+            <span class="metric-val" id="metricKappa">-</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Triangularity (δ)</span>
+            <span class="metric-val" id="metricDelta">-</span>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Slide-out Diff Modal / Drawer -->
+    <div class="diff-drawer" id="diffDrawer">
+      <div class="diff-header">
+        <h3>Configuration Diff</h3>
+        <button class="btn-icon" id="btnCloseDiff">✕</button>
+      </div>
+      <div class="diff-body" id="diffList">
+        <p class="diff-empty">No modified parameters. Twiddle any slider to see diffs.</p>
+      </div>
+    </div>
+
+    <!-- Parameter Scan Studio Modal -->
+    <div class="modal-backdrop" id="scanModal">
+      <div class="scan-modal-content">
+        <div class="modal-header">
+          <div class="modal-title">
+            <h2>⚡ Parameter Sweep Studio</h2>
+            <span class="subtitle">Evaluate reactor sensitivity curves & design points</span>
+          </div>
+          <button class="btn-icon" id="btnCloseScan">✕</button>
+        </div>
+
+        <div class="scan-modal-body">
+          <!-- Setup Panel -->
+          <div class="scan-setup-card">
+            <div class="form-row">
+              <label for="scanParamSelect">Sweep Parameter:</label>
+              <select id="scanParamSelect" class="styled-select">
+                <!-- Injected via app.js -->
+              </select>
+            </div>
+
+            <div class="range-grid">
+              <div class="form-group">
+                <label for="scanMin">Min Value:</label>
+                <input type="number" id="scanMin" step="0.1" value="7.5" class="num-input">
+              </div>
+              <div class="form-group">
+                <label for="scanMax">Max Value:</label>
+                <input type="number" id="scanMax" step="0.1" value="10.5" class="num-input">
+              </div>
+              <div class="form-group">
+                <label for="scanSteps">Steps:</label>
+                <input type="number" id="scanSteps" min="2" max="50" value="7" class="num-input">
+              </div>
+            </div>
+
+            <div class="metrics-selector">
+              <span class="selector-label">Metrics to Extract:</span>
+              <div class="checkbox-group">
+                <label><input type="checkbox" value="aspect_ratio" checked> Aspect Ratio</label>
+                <label><input type="checkbox" value="plasma_volume" checked> Plasma Volume</label>
+                <label><input type="checkbox" value="plasma_surface_area" checked> Surface Area</label>
+                <label><input type="checkbox" value="blanket_thickness" checked> Blanket Thickness</label>
+              </div>
+            </div>
+
+            <div class="scan-actions">
+              <button class="btn btn-primary" id="btnRunSweep">▶ Run Sweep</button>
+              <div class="scan-export-group" id="scanExportControls" style="display: none;">
+                <a class="btn btn-secondary btn-sm" href="/api/scan/export?format=csv" download="bluemira_scan_results.csv">↓ CSV</a>
+                <a class="btn btn-secondary btn-sm" href="/api/scan/export?format=json" download="bluemira_scan_results.json">↓ JSON</a>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chart & Results Panel -->
+          <div class="scan-results-area">
+            <div class="chart-container">
+              <div class="chart-header">
+                <span class="chart-title" id="chartTitle">Sensitivity Curves</span>
+                <span class="chart-legend" id="chartLegend"></span>
+              </div>
+              <canvas id="scanChartCanvas" width="620" height="240"></canvas>
+            </div>
+
+            <!-- Results Table -->
+            <div class="table-container">
+              <table class="scan-table" id="scanTable">
+                <thead>
+                  <tr id="scanTableHead">
+                    <th>#</th>
+                    <th>Status</th>
+                    <th>Value</th>
+                    <th>Aspect Ratio</th>
+                    <th>Plasma Vol (m³)</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="scanTableBody">
+                  <tr><td colspan="6" class="table-empty">Configure sweep parameters and click Run Sweep</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
